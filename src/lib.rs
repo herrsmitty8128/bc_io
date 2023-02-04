@@ -3,6 +3,9 @@ use std::cmp::Ordering;
 
 /// number of bytes in a 512-bit block
 const BLOCK_SIZE: usize = 512 / 8;
+const DIGEST_BYTES: usize = 32;
+const MSG_SCH_BYTES: usize = 64;
+const MIN_BLOCK_BYTES: usize  = 64;
 
 /// The first 32 bits of the fractional parts of the cube roots of the first 64 primes 2 through 311.
 const CONSTANTS: [u32; 64] = [
@@ -87,6 +90,37 @@ impl Digest {
         }
     }
 
+    /// Creates a new digest by cloning the buffer. If buffer.len() is not equal to 32, the Err(()) will be returned. Otherwise, Ok(Digest) will be returned.
+    pub fn with_slice(buffer: &[u8]) -> Result<Digest, String> {
+        let mut digest: Digest = Digest { data: [0; 8] };
+        if buffer.len() == 32 {
+            for i in 0..8 {
+                unsafe{digest.data[i] = *(buffer.as_ptr().add(i * 4) as *const u32)};
+            }
+            Ok(digest)
+        } else {
+            Err(format!("Found slice &[u8] with length {}, expected length 32.", buffer.len()))
+        }
+    }
+
+    /// Writes the contents of the digest's data array [u32] into the buffer [u8]. Buffer.len() must equal 32.
+    pub fn write_to_slice(&mut self, buffer: &mut [u8]) -> Result<(), String> {
+        if buffer.len() == 32 {
+            unsafe{
+                let mut ptr: *mut u8 = self.data.as_mut_ptr() as *mut u8;
+                //for i in 0..32 {
+                for item in buffer.iter_mut().take(32) {
+                    //buffer[i] = *ptr;
+                    *item = *ptr;
+                    ptr = ptr.add(1);
+                }
+            }
+            Ok(())
+        } else {
+            Err(String::from("Slice length is not equal to the required length of 32 bytes."))
+        }
+    }
+
     /// Prints the text representation of the digest in hexidecimal format to stdio.
     pub fn print_as_hex(&self) {
         for x in self.data {
@@ -147,7 +181,7 @@ impl Digest {
     }
 
     /// Calculates and returns a new SHA-256 digest from a vector of bytes.
-    fn from_buffer(buf: &mut Vec<u8>) -> Digest {
+    pub fn from_buffer(buf: &mut Vec<u8>) -> Digest {
         let mut digest: Digest = Digest::new();
         let mut msg_sch: MsgSch = MsgSch::default();
         Self::fix_up(buf, buf.len());
@@ -215,30 +249,20 @@ impl Digest {
     }
 }
 
-pub const MIN_HEADER_SIZE: usize = 64; // 64 bytes = 512 bits
-pub const MIN_BODY_SIZE: usize = 64;
-pub const MIN_BLOCK_SIZE: usize = 64;
-
 pub trait Converter {
-    fn write_to_buffer(&self, buffer: &mut [u8]);
-    fn build_from_buffer(buffer: &mut [u8]) -> Self;
+    fn write_to_slice(&self, buffer: &mut [u8]) -> Result<(), String>;
+    fn from_buffer(buffer: &mut [u8]) -> Self;
 }
 
 #[derive(Debug, Clone)]
-pub struct Block<const S: usize, T> 
-where
-    T: Converter
-{
+pub struct Block<const S: usize> {
     data: [u8; S],
 }
 
-impl<const S: usize, T> Block<S,T> 
-where
-    T: Converter
-{
-    pub fn new() -> Result<Self, ()> {
-        if S < MIN_BLOCK_SIZE {
-            Err(())
+impl<const S: usize> Block<S> {
+    pub fn new() -> Result<Block<S>, String> {
+        if S < MIN_BLOCK_BYTES {
+            Err(format!("Block size is less than the minimum block size of {} bytes.", MIN_BLOCK_BYTES))
         } else {
             Ok(
                 Self{
@@ -248,21 +272,30 @@ where
         }
     }
 
-    pub fn calc_digest(&self) -> Digest {
-        Digest::from_buffer(&mut self.data)
+    pub fn calculate_digest(&self) -> Digest {
+        Digest::from_buffer(&mut Vec::from(self.data))
     }
 
-    pub fn prev_digest(&self) -> Digest {
-        Digest::create(
-            unsafe{self.data[0..32].align_to_mut::<u32>().1}
-        )
+    pub fn get_prev_block_digest(&self) -> Digest {
+        Digest::with_slice(&self.data[0..32]).unwrap()
     }
 
-    pub fn build(&self) -> T {
-        T::build_from_buffer(&mut self.data[32..S])
+    /// Creates a new object of type T from the data section of the block's buffer.
+    pub fn to_object<T: Converter>(&mut self) -> T {
+        T::from_buffer(&mut self.data[DIGEST_BYTES..S])
+    }
+
+    /// Creates a new Block object from the previous block's SHA-256 digest and an object in memory.
+    pub fn with_digest_and_object<T: Converter>(digest: &mut Digest, object: &T) -> Result<Block<S>, String> {
+        let mut block: Block<S> = Self::new()?;
+        let (first,second) = block.data.split_at_mut(DIGEST_BYTES);
+        digest.write_to_slice(first)?;
+        object.write_to_slice(second)?;
+        Ok(block)
     }
 }
 
+/*
 
 #[derive(Debug, Clone)]
 pub struct BlockChain<const S: usize>{
@@ -282,17 +315,7 @@ impl<const S: usize> BlockChain<S> {
     }
 
     fn sizes_are_valid(header_size: usize, body_size: usize) -> bool {
-        if header_size < MIN_HEADER_SIZE {
-            false
-        } else if header_size & (MIN_HEADER_SIZE - 1) != 0 {
-            false
-        } else if body_size < MIN_BODY_SIZE {
-            false
-        } else if body_size & (MIN_BODY_SIZE - 1) != 0 {
-            false
-        } else {
-            true
-        }
+        true
     }
 
     pub fn get_body_size(&self) -> usize {
@@ -307,9 +330,10 @@ impl<const S: usize> BlockChain<S> {
         self.body_size + self.header_size
     }
 
-    /*pub fn append(&self, block: &Block) -> Result<(), String> {
+    pub fn append(&self, block: &Block) -> Result<(), String> {
 
-    }*/
+    }
 
 }
+*/
 
