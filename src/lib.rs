@@ -37,8 +37,8 @@ pub mod fixed_size {
             }
         }
 
-        pub fn size(&self) -> usize {
-            S
+        pub fn size(&self) -> u64 {
+            S as u64
         }
 
         pub fn calculate_digest(&self) -> Digest {
@@ -94,7 +94,7 @@ pub mod fixed_size {
             match File::open(path) {
                 Ok(_) => Err(Error::new(ErrorKind::AlreadyExists, "File already exists.")),
                 Err(_) => {
-                    if genisis_block.size() != S {
+                    if genisis_block.size() != S as u64 {
                         // do we really need this section?
                         return Err(Error::new(
                             ErrorKind::InvalidInput,
@@ -170,7 +170,7 @@ pub mod fixed_size {
         }
 
         pub fn append(&self, block: &mut Block<S>) -> ioResult<()> {
-            if block.size() != S {
+            if block.size() != S as u64 {
                 return Err(Error::new(
                     ErrorKind::Other,
                     format!("Block size is not equal to {}.", S),
@@ -194,7 +194,7 @@ pub mod fixed_size {
             let mut block: Block<S> = Block::new()?;
             let file: File = File::open(&self.path)?;
             let file_size: u64 = file.metadata()?.len();
-            let offset = number.checked_mul(self.block_size()).ok_or(Error::new(
+            let offset: u64 = number.checked_mul(self.block_size()).ok_or(Error::new(
                 ErrorKind::Other,
                 "Integer overflowed when calculating file position.",
             ))?;
