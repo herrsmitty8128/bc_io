@@ -5,9 +5,9 @@ pub trait Converter {
 
 pub mod fixed_size {
     use sha2::sha256::{Digest, DIGEST_BYTES};
-    use std::fs::{File, Metadata};
-    use std::io::Result as ioResult;
+    use std::fs::File;
     use std::io::{Error, ErrorKind};
+    use std::io::{Result as ioResult, Write};
     use std::os::unix::prelude::FileExt;
 
     const MIN_BLOCK_BYTES: usize = 64;
@@ -37,12 +37,24 @@ pub mod fixed_size {
             }
         }
 
+        pub fn size(&self) -> usize {
+            S
+        }
+
         pub fn calculate_digest(&self) -> Digest {
             Digest::from_buffer(&mut Vec::from(self.data))
         }
 
         pub fn get_prev_block_digest(&self) -> Digest {
-            Digest::with_slice(&self.data[0..32]).unwrap()
+            Digest::with_slice(&self.data[0..DIGEST_BYTES]).unwrap()
+        }
+
+        pub fn set_prev_block_digest(&mut self, digest: &mut Digest) {
+            // digest.write_to_slice() only returns an Err(String) if the slice lengths are not equal.
+            // That is not the case here, so it's ok to use unwrap().
+            digest
+                .write_to_slice(&mut self.data[0..DIGEST_BYTES])
+                .unwrap();
         }
 
         /// Creates a new object of type T from the data section of the block's buffer.
@@ -51,7 +63,7 @@ pub mod fixed_size {
         }
 
         /// Creates a new Block object from the previous block's SHA-256 digest and an object in memory.
-        pub fn with_digest_and_object<T: super::Converter>(
+        pub fn from_digest_and_object<T: super::Converter>(
             digest: &mut Digest,
             object: &mut T,
         ) -> Result<Block<S>, String> {
@@ -69,46 +81,62 @@ pub mod fixed_size {
 
     #[derive(Debug, Clone)]
     pub struct BlockChain<const S: usize> {
-        file: String,
-        origin_block: Block<S>,
-        buffer: Vec<Block<S>>,
+        path: String,
     }
 
     impl<const S: usize> BlockChain<S> {
-        pub fn new(file: &String, origin_block: &Block<S>) -> Result<Self, String> {
-            if S < MIN_BLOCK_BYTES || S & 63 != 0 {
-                Err(format!(
-                    "Block size is less than the minimum block size of {} bytes.",
-                    MIN_BLOCK_BYTES
+        /// Creates 1.) a new BlockChain file in the local file system located at *file_path*
+        /// and object, and 2.) returns the cooresponding new BlockChain object.
+        pub fn new<T: super::Converter>(
+            path: &str,
+            genisis_block: &Block<S>,
+        ) -> ioResult<BlockChain<S>> {
+            match File::open(path) {
+                Ok(_) => Err(Error::new(ErrorKind::Other, "File already exists.")),
+                Err(_) => {
+                    let mut file: File = File::create(path)?;
+                    file.write_all(&genisis_block.data)?;
+                    Ok(Self {
+                        path: path.to_owned(),
+                    })
+                }
+            }
+        }
+
+        /// Creates a new BlockChain object from an existing file in the local file system.
+        pub fn with_file(path: &str) -> ioResult<BlockChain<S>> {
+            let file: File = File::open(path)?;
+            let file_size: u64 = file.metadata()?.len();
+            if file_size == 0 {
+                Err(Error::new(ErrorKind::Other, "File is empty."))
+            } else if file_size % S as u64 != 0 {
+                Err(Error::new(
+                    ErrorKind::Other,
+                    "File size is not a multiple of block size.",
                 ))
-            } else if S & 63 != 0 {
-                Err(String::from("Block size must be a multiple of 64 bytes."))
             } else {
-                Ok(Self {
-                    file: file.clone(),
-                    origin_block: origin_block.clone(),
-                    buffer: Vec::new(),
+                Ok(BlockChain {
+                    path: path.to_owned(),
                 })
             }
         }
 
-        pub fn block_size(&self) -> usize {
-            S
+        #[inline]
+        pub fn block_size(&self) -> u64 {
+            S as u64
         }
 
         pub fn file_size(&self) -> ioResult<u64> {
-            let file: File = File::open(&self.file)?;
-            let meta_data: Metadata = file.metadata()?;
-            Ok(meta_data.len())
+            Ok(File::open(&self.path)?.metadata()?.len())
         }
 
         pub fn block_count(&self) -> ioResult<u64> {
-            let file: File = File::open(&self.file)?;
-            let block_size: u64 = S as u64;
-            let meta_data: Metadata = file.metadata()?;
-            let file_size: u64 = meta_data.len();
-            if file_size >= block_size && file_size % block_size == 0 {
-                Ok((file_size / block_size) as u64)
+            let file: File = File::open(&self.path)?;
+            let file_size: u64 = file.metadata()?.len();
+            if file_size == 0 {
+                Ok(0)
+            } else if file_size % self.block_size() == 0 {
+                Ok((file_size / self.block_size()) as u64)
             } else {
                 Err(Error::new(
                     ErrorKind::Other,
@@ -119,15 +147,34 @@ pub mod fixed_size {
 
         pub fn read_last_block(&self) -> ioResult<Block<S>> {
             let mut block: Block<S> = Block::new()?;
-            let file: File = File::open(&self.file)?;
-            let block_size: u64 = S as u64;
-            let meta_data: Metadata = file.metadata()?;
-            let file_size: u64 = meta_data.len();
+            let file: File = File::open(&self.path)?;
+            let file_size: u64 = file.metadata()?.len();
             if file_size == 0 {
-                // add the origin block
-            } else if file_size >= block_size && file_size % block_size == 0 {
-                file.read_exact_at(&mut block.data, file_size - block_size)?;
+                Err(Error::new(ErrorKind::Other, "File is empty."))
+            } else if file_size % self.block_size() != 0 {
+                Err(Error::new(
+                    ErrorKind::Other,
+                    "File size is not a multiple of block size.",
+                ))
+            } else {
+                file.read_exact_at(&mut block.data, file_size - self.block_size())?;
                 Ok(block)
+            }
+        }
+
+        pub fn append(&self, block: &mut Block<S>) -> ioResult<()> {
+            if block.size() != S {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("Block size is not equal to {}.", S),
+                ));
+            }
+            block.set_prev_block_digest(&mut self.read_last_block()?.calculate_digest());
+            let mut file: File = File::open(&self.path)?; // MUST OPEN THE FILE FOR WRITTING!!!!!!!!!!
+            let file_size: u64 = file.metadata()?.len();
+            if file_size % self.block_size() == 0 {
+                file.write_all(&block.data)?;
+                Ok(())
             } else {
                 Err(Error::new(
                     ErrorKind::Other,
@@ -136,8 +183,26 @@ pub mod fixed_size {
             }
         }
 
-        pub fn append(&self, block: &Block<S>) -> ioResult<()> {
-            Err(Error::new(ErrorKind::Other, "error"))
+        pub fn read_block(&self, number: u64) -> ioResult<Block<S>> {
+            let mut block: Block<S> = Block::new()?;
+            let file: File = File::open(&self.path)?;
+            let file_size: u64 = file.metadata()?.len();
+            let offset: u64 = number * self.block_size();
+            if file_size == 0 {
+                Err(Error::new(ErrorKind::Other, "File is empty."))
+            } else if file_size % self.block_size() != 0 {
+                Err(Error::new(
+                    ErrorKind::Other,
+                    "File size is not a multiple of block size.",
+                ))
+            } else if offset > (file_size - self.block_size()) {
+                Err(Error::new(ErrorKind::Other, "Block number is too big."))
+            } else {
+                file.read_exact_at(&mut block.data, offset)?;
+                Ok(block)
+            }
         }
+
+        //pub fn read_blocks(&self, start: usize, end: usize) -> Vec<Block<S>> {}
     }
 }
