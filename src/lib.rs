@@ -118,7 +118,9 @@ pub mod fixed_size {
             let block_size: u64 = S as u64;
             let meta_data: Metadata = file.metadata()?;
             let file_size: u64 = meta_data.len();
-            if file_size >= block_size && file_size % block_size == 0 {
+            if file_size == 0 {
+                // add the origin block
+            } else if file_size >= block_size && file_size % block_size == 0 {
                 file.read_exact_at(&mut block.data, file_size - block_size)?;
                 Ok(block)
             } else {
