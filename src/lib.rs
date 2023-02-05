@@ -6,8 +6,7 @@ pub trait Converter {
 pub mod fixed_size {
     use sha2::sha256::{Digest, DIGEST_BYTES};
     use std::fs::File;
-    use std::io::{Error, ErrorKind};
-    use std::io::{Result as ioResult, Write};
+    use std::io::{Error, ErrorKind, Result as ioResult, Write};
     use std::os::unix::prelude::FileExt;
 
     const MIN_BLOCK_BYTES: usize = 64;
@@ -19,7 +18,8 @@ pub mod fixed_size {
 
     impl<const S: usize> Block<S> {
         pub fn new() -> ioResult<Block<S>> {
-            if S < MIN_BLOCK_BYTES || S & 63 != 0 {
+            if S < MIN_BLOCK_BYTES {
+                // move this validation to BlockChain
                 Err(Error::new(
                     ErrorKind::Other,
                     format!(
@@ -27,7 +27,7 @@ pub mod fixed_size {
                         MIN_BLOCK_BYTES
                     ),
                 ))
-            } else if S & 63 != 0 {
+            } else if S as u64 & 63 != 0 {
                 Err(Error::new(
                     ErrorKind::Other,
                     String::from("Block size must be a multiple of 64 bytes."),
@@ -92,12 +92,12 @@ pub mod fixed_size {
             genisis_block: &Block<S>,
         ) -> ioResult<BlockChain<S>> {
             match File::open(path) {
-                Ok(_) => Err(Error::new(ErrorKind::Other, "File already exists.")),
+                Ok(_) => Err(Error::new(ErrorKind::AlreadyExists, "File already exists.")),
                 Err(_) => {
                     if genisis_block.size() != S {
                         // do we really need this section?
                         return Err(Error::new(
-                            ErrorKind::Other,
+                            ErrorKind::InvalidInput,
                             "Block sizes for genisis block and BlockChain are not equal.",
                         ));
                     }
@@ -118,7 +118,7 @@ pub mod fixed_size {
                 Err(Error::new(ErrorKind::Other, "File is empty."))
             } else if file_size % S as u64 != 0 {
                 Err(Error::new(
-                    ErrorKind::Other,
+                    ErrorKind::InvalidInput,
                     "File size is not a multiple of block size.",
                 ))
             } else {
@@ -194,7 +194,10 @@ pub mod fixed_size {
             let mut block: Block<S> = Block::new()?;
             let file: File = File::open(&self.path)?;
             let file_size: u64 = file.metadata()?.len();
-            let offset: u64 = number * self.block_size();
+            let offset = number.checked_mul(self.block_size()).ok_or(Error::new(
+                ErrorKind::Other,
+                "Integer overflowed when calculating file position.",
+            ))?;
             if file_size == 0 {
                 Err(Error::new(ErrorKind::Other, "File is empty."))
             } else if file_size % self.block_size() != 0 {
