@@ -6,8 +6,8 @@ pub trait Converter {
 pub mod fixed_size {
     use sha2::sha256::{Digest, DIGEST_BYTES};
     use std::fs::{File, Metadata};
-    use std::io::{Error, ErrorKind};
     use std::io::Result as ioResult;
+    use std::io::{Error, ErrorKind};
     use std::os::unix::prelude::FileExt;
 
     const MIN_BLOCK_BYTES: usize = 64;
@@ -20,19 +20,18 @@ pub mod fixed_size {
     impl<const S: usize> Block<S> {
         pub fn new() -> ioResult<Block<S>> {
             if S < MIN_BLOCK_BYTES || S & 63 != 0 {
-                Err(
-                    Error::new(
-                        ErrorKind::Other,
-                        format!("Block size is less than the minimum block size of {} bytes.", MIN_BLOCK_BYTES)
-                    )
-                )
+                Err(Error::new(
+                    ErrorKind::Other,
+                    format!(
+                        "Block size is less than the minimum block size of {} bytes.",
+                        MIN_BLOCK_BYTES
+                    ),
+                ))
             } else if S & 63 != 0 {
-                Err(
-                    Error::new(
-                        ErrorKind::Other,
-                        String::from("Block size must be a multiple of 64 bytes.")
-                    )
-                )
+                Err(Error::new(
+                    ErrorKind::Other,
+                    String::from("Block size must be a multiple of 64 bytes."),
+                ))
             } else {
                 Ok(Self { data: [0; S] })
             }
@@ -63,7 +62,7 @@ pub mod fixed_size {
                     object.write_to_slice(second)?;
                     Ok(block)
                 }
-                Err(e) => Err(e.to_string())
+                Err(e) => Err(e.to_string()),
             }
         }
     }
@@ -75,10 +74,13 @@ pub mod fixed_size {
         buffer: Vec<Block<S>>,
     }
 
-    impl<const S: usize> BlockChain<S>{
+    impl<const S: usize> BlockChain<S> {
         pub fn new(file: &String, origin_block: &Block<S>) -> Result<Self, String> {
             if S < MIN_BLOCK_BYTES || S & 63 != 0 {
-                Err(format!("Block size is less than the minimum block size of {} bytes.",MIN_BLOCK_BYTES))
+                Err(format!(
+                    "Block size is less than the minimum block size of {} bytes.",
+                    MIN_BLOCK_BYTES
+                ))
             } else if S & 63 != 0 {
                 Err(String::from("Block size must be a multiple of 64 bytes."))
             } else {
@@ -108,7 +110,10 @@ pub mod fixed_size {
             if file_size >= block_size && file_size % block_size == 0 {
                 Ok((file_size / block_size) as u64)
             } else {
-                Err(Error::new(ErrorKind::Other, "File size is not a multiple of block size."))
+                Err(Error::new(
+                    ErrorKind::Other,
+                    "File size is not a multiple of block size.",
+                ))
             }
         }
 
@@ -124,7 +129,10 @@ pub mod fixed_size {
                 file.read_exact_at(&mut block.data, file_size - block_size)?;
                 Ok(block)
             } else {
-                Err(Error::new(ErrorKind::Other, "File size is not a multiple of block size."))
+                Err(Error::new(
+                    ErrorKind::Other,
+                    "File size is not a multiple of block size.",
+                ))
             }
         }
 
