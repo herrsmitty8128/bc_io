@@ -85,8 +85,8 @@ pub mod fixed_size {
     }
 
     impl<const S: usize> BlockChain<S> {
-        /// Creates 1.) a new BlockChain file in the local file system located at *file_path*
-        /// and object, and 2.) returns the cooresponding new BlockChain object.
+        /// Creates 1.) a new BlockChain file in the local file system located at *path*
+        /// and, 2.) returns the cooresponding new BlockChain object.
         pub fn new<T: super::Converter>(
             path: &str,
             genisis_block: &Block<S>,
@@ -94,6 +94,13 @@ pub mod fixed_size {
             match File::open(path) {
                 Ok(_) => Err(Error::new(ErrorKind::Other, "File already exists.")),
                 Err(_) => {
+                    if genisis_block.size() != S {
+                        // do we really need this section?
+                        return Err(Error::new(
+                            ErrorKind::Other,
+                            "Block sizes for genisis block and BlockChain are not equal.",
+                        ));
+                    }
                     let mut file: File = File::create(path)?;
                     file.write_all(&genisis_block.data)?;
                     Ok(Self {
