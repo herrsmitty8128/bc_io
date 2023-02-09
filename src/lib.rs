@@ -1,6 +1,6 @@
-pub trait Converter {
-    fn write_to_slice(&self, buffer: &mut [u8]) -> Result<(), String>;
-    fn from_buffer(buffer: &mut [u8]) -> Self;
+pub trait Changling {
+    fn to_bytes(&self) -> &[u8];
+    fn from_bytes(buffer: &[u8]) -> Self;
 }
 
 pub mod fixed_size {
@@ -9,17 +9,18 @@ pub mod fixed_size {
     use std::io::{Error, ErrorKind, Result as ioResult, Write};
     use std::os::unix::prelude::FileExt;
 
-    const MIN_BLOCK_BYTES: usize = 64;
+    use crate::Changling;
+
+    const MIN_BLOCK_BYTES: usize = DIGEST_BYTES * 2;
 
     #[derive(Debug, Clone)]
     pub struct Block<const S: usize> {
-        data: [u8; S],
+        buffer: [u8; S],
     }
 
     impl<const S: usize> Block<S> {
         pub fn new() -> ioResult<Block<S>> {
             if S < MIN_BLOCK_BYTES {
-                // move this validation to BlockChain
                 Err(Error::new(
                     ErrorKind::Other,
                     format!(
@@ -27,13 +28,13 @@ pub mod fixed_size {
                         MIN_BLOCK_BYTES
                     ),
                 ))
-            } else if S as u64 & 63 != 0 {
+            } else if (S as u64) & (DIGEST_BYTES as u64) != 0 {
                 Err(Error::new(
                     ErrorKind::Other,
-                    String::from("Block size must be a multiple of 64 bytes."),
+                    format!("Block size must be a multiple of {} bytes.", DIGEST_BYTES),
                 ))
             } else {
-                Ok(Self { data: [0; S] })
+                Ok(Self { buffer: [0; S] })
             }
         }
 
@@ -41,44 +42,33 @@ pub mod fixed_size {
             S as u64
         }
 
-        pub fn calculate_digest(&self) -> Digest {
-            Digest::from_buffer(&mut Vec::from(self.data))
+        pub fn as_bytes(&self) -> &[u8] {
+            &self.buffer
         }
 
-        pub fn get_prev_block_digest(&self) -> Digest {
-            Digest::with_slice(&self.data[0..DIGEST_BYTES]).unwrap()
+        pub fn prev_digest_as_bytes(&self) -> &[u8] {
+            &self.buffer[0..DIGEST_BYTES]
         }
 
-        pub fn set_prev_block_digest(&mut self, digest: &mut Digest) {
-            // digest.write_to_slice() only returns an Err(String) if the slice lengths are not equal.
-            // That is not the case here, so it's ok to use unwrap().
-            digest
-                .write_to_slice(&mut self.data[0..DIGEST_BYTES])
-                .unwrap();
+        pub fn prev_digest(&self) -> Digest {
+            Digest::new(self.prev_digest_as_bytes()).unwrap()
         }
 
-        /// Creates a new object of type T from the data section of the block's buffer.
-        pub fn to_object<T: super::Converter>(&mut self) -> T {
-            T::from_buffer(&mut self.data[DIGEST_BYTES..S])
+        pub fn data_as_bytes(&self) -> &[u8] {
+            &self.buffer[DIGEST_BYTES..S]
         }
 
-        /// Creates a new Block object from the previous block's SHA-256 digest and an object in memory.
-        pub fn from_digest_and_object<T: super::Converter>(
-            digest: &mut Digest,
-            object: &mut T,
-        ) -> Result<Block<S>, String> {
-            match Self::new() {
-                Ok(mut block) => {
-                    let (first, second) = block.data.split_at_mut(DIGEST_BYTES);
-                    digest.write_to_slice(first)?;
-                    object.write_to_slice(second)?;
-                    Ok(block)
-                }
-                Err(e) => Err(e.to_string()),
-            }
+        pub fn data_as_object<T: Changling>(&self) -> T {
+            T::from_bytes(self.data_as_bytes())
         }
+
+        pub fn digest(&self) -> Digest {
+            Digest::from_buffer(&mut Vec::from(self.as_bytes()))
+        }
+
     }
 
+    /*
     #[derive(Debug, Clone)]
     pub struct BlockChain<const S: usize> {
         path: String,
@@ -176,7 +166,7 @@ pub mod fixed_size {
                     format!("Block size is not equal to {}.", S),
                 ));
             }
-            block.set_prev_block_digest(&mut self.read_last_block()?.calculate_digest());
+            block.set_prev_block_digest(&mut self.read_last_block()?.digest());
             let mut file: File = File::open(&self.path)?; // MUST OPEN THE FILE FOR WRITTING!!!!!!!!!!
             let file_size: u64 = file.metadata()?.len();
             if file_size % self.block_size() == 0 {
@@ -215,4 +205,5 @@ pub mod fixed_size {
 
         //pub fn read_blocks(&self, start: usize, end: usize) -> Vec<Block<S>> {}
     }
+    */
 }
