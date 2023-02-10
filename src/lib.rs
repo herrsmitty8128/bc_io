@@ -1,13 +1,13 @@
 pub trait Changling {
-    fn to_bytes(&self) -> &[u8];
+    fn as_bytes(&self) -> &[u8];
     fn from_bytes(buffer: &[u8]) -> Self;
 }
 
 pub mod fixed_size {
     use sha2::sha256::{Digest, DIGEST_BYTES};
-    use std::fs::File;
+    //use std::fs::File;
     use std::io::{Error, ErrorKind, Result as ioResult, Write};
-    use std::os::unix::prelude::FileExt;
+    //use std::os::unix::prelude::FileExt;
 
     use crate::Changling;
 
@@ -19,6 +19,7 @@ pub mod fixed_size {
     }
 
     impl<const S: usize> Block<S> {
+        /// Attempts to create a new Block<S> object. 
         pub fn new() -> ioResult<Block<S>> {
             if S < MIN_BLOCK_BYTES {
                 Err(Error::new(
@@ -38,34 +39,40 @@ pub mod fixed_size {
             }
         }
 
+        /// Returns the size of the block in bytes.
         pub fn size(&self) -> u64 {
             S as u64
         }
 
+        /// Returns the block's buffer as a slice.
         pub fn as_bytes(&self) -> &[u8] {
             &self.buffer
         }
 
+        /// Returns the previous digest section of the block's buffer as a slice.
         pub fn prev_digest_as_bytes(&self) -> &[u8] {
             &self.buffer[0..DIGEST_BYTES]
         }
 
+        /// Returns a digest object from the previous digest section of the block's buffer.
         pub fn prev_digest(&self) -> Digest {
-            Digest::new(self.prev_digest_as_bytes()).unwrap()
+            Digest::from_bytes(self.prev_digest_as_bytes()).unwrap()
         }
 
+        /// Returns the data section of the block's buffer as a slice.
         pub fn data_as_bytes(&self) -> &[u8] {
             &self.buffer[DIGEST_BYTES..S]
         }
 
+        /// Creates and returns an object of type T from the data section of the block's buffer.
         pub fn data_as_object<T: Changling>(&self) -> T {
             T::from_bytes(self.data_as_bytes())
         }
 
+        /// Calculates and returns the block's SHA-256 digest.
         pub fn digest(&self) -> Digest {
             Digest::from_buffer(&mut Vec::from(self.as_bytes()))
         }
-
     }
 
     /*
