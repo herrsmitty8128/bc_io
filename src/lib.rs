@@ -47,6 +47,7 @@ pub mod off_chain {
     }
 
     impl From<&[u8; BLOCK_SIZE]> for Block {
+        /// Serializes and returns a new block from an array of 32 bytes.
         fn from(buf: &[u8; BLOCK_SIZE]) -> Self {
             Self {
                 timestamp: u64::from_le_bytes(buf[TIMESTAMP.0..TIMESTAMP.1].try_into().unwrap()),
@@ -167,6 +168,7 @@ pub mod off_chain {
                 ))
             } else if file_size % BLOCK_SIZE as u64 == 0 {
                 let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
+                // NEED TO UPDATE THE PREV HASH FIELD!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 block.deserialize(&mut buf);
                 file.write_all(&buf)?;
                 Ok(())
@@ -193,7 +195,7 @@ pub mod off_chain {
                     "File size is not a multiple of block size.",
                 ))
             } else if offset > (file_size - BLOCK_SIZE as u64) {
-                Err(Error::new(ErrorKind::Other, "Block number is too big."))
+                Err(Error::new(ErrorKind::Other, "Block number is out of range."))
             } else {
                 let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
                 file.read_exact_at(&mut buf, offset)?;
