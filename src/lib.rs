@@ -50,7 +50,7 @@ pub mod off_chain {
                 user_id,
                 version,
                 data_size: data.len() as u64,
-                data_hash: Digest::from_buffer(data)?,
+                data_hash: Digest::from(data),
                 prev_hash: Digest::default(),
             })
         }
@@ -174,7 +174,7 @@ pub mod off_chain {
             self.inner.seek(SeekFrom::End(-(BLOCK_SIZE as i64)));
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             self.inner.read_exact(&mut buf)?;
-            Digest::from_buffer_and_digest(digest, &buf);
+            Digest::calculate(digest, &buf);
             Ok(())
         }
 
@@ -188,30 +188,31 @@ pub mod off_chain {
     }
 
     #[derive(Debug)]
-    pub struct BlockChainFileWriter {}
+    pub struct BlockChainFileWriter {
+        inner: BufWriter<File>
+    }
 
     impl BlockChainFileWriter {
-        pub fn append(file: &BlockChainFile, block: &mut Block) -> ioResult<()> {
-            Self::write_prev_digest_to(file, &mut block.prev_hash)?;
+        pub fn new(file: &BlockChainFile) -> Self {
+            Self { inner: BufWriter::new(file.inner) }
+        }
+
+        pub fn append(&self, block: &mut Block) -> ioResult<()> {
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             block.deserialize(&mut buf);
-            let writer: BufWriter<File> = BufWriter::new(file.inner);
-            writer.seek(SeekFrom::End(0))?;
-            writer.write_all(&buf)?;
-            writer.flush()
+            self.inner.seek(SeekFrom::End(0))?;
+            self.inner.write_all(&buf)?;
+            self.inner.flush()
         }
 
-        pub fn append_all(file: &BlockChainFile, chain: &BlockChain) {
-            let prev_digest: Digest = Digest::default();
-            Self::write_prev_digest_to(file, &mut block.prev_hash)?;
+        pub fn append_all(&self, chain: &BlockChain) -> ioResult<()> {
+            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
+            self.inner.seek(SeekFrom::End(0))?;
             for block in chain {
-
+                block.deserialize(&mut buf);
+                self.inner.write_all(&buf)?;
             }
-        }
-
-        /// Reads the last block in the file, calculates its digest, and writes the digest to block.prev_hash. Returns Err(io::Error) on failure.
-        fn write_prev_digest_to(file: &BlockChainFile, digest: &mut Digest) -> ioResult<()> {
-            BlockChainFileReader::new(file).calc_last_block_digest(digest)
+            self.inner.flush()
         }
     }
 }
