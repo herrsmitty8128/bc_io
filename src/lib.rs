@@ -205,10 +205,10 @@ pub mod off_chain {
             self.inner.flush()
         }
 
-        pub fn append_all(&self, chain: &BlockChain) -> ioResult<()> {
+        pub fn append_all(&self, blocks: &BlockChain) -> ioResult<()> {
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             self.inner.seek(SeekFrom::End(0))?;
-            for block in chain {
+            for block in blocks {
                 block.deserialize(&mut buf);
                 self.inner.write_all(&buf)?;
             }
