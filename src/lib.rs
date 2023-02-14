@@ -29,7 +29,7 @@ pub mod off_chain {
     pub const USER_ID: (usize, usize) = (8, 8);
     pub const VERSION: (usize, usize) = (16, 8);
     pub const DATA_SIZE: (usize, usize) = (24, 8);
-    pub const DATA_HASH: (usize, usize) = (32, DIGEST_BYTES);
+    pub const MERKLE_ROOT: (usize, usize) = (32, DIGEST_BYTES);
     pub const PREV_HASH: (usize, usize) = (32 + DIGEST_BYTES, DIGEST_BYTES);
     pub const BLOCK_SIZE: usize = 32 + (DIGEST_BYTES * 2);
 
@@ -39,7 +39,7 @@ pub mod off_chain {
         user_id: u64,
         version: u64,
         data_size: u64,
-        data_hash: Digest,
+        merkle_root: Digest,
         prev_hash: Digest,
     }
 
@@ -50,7 +50,7 @@ pub mod off_chain {
                 user_id,
                 version,
                 data_size: data.len() as u64,
-                data_hash: Digest::from(data),
+                merkle_root: Digest::from(data),
                 prev_hash: Digest::default(),
             })
         }
@@ -61,7 +61,7 @@ pub mod off_chain {
                 user_id: u64::from_le_bytes(buf[USER_ID.0..USER_ID.1].try_into().unwrap()),
                 version: u64::from_le_bytes(buf[VERSION.0..VERSION.1].try_into().unwrap()),
                 data_size: u64::from_le_bytes(buf[DATA_SIZE.0..DATA_SIZE.1].try_into().unwrap()),
-                data_hash: Digest::from_bytes(&buf[DATA_HASH.0..DATA_HASH.1]).unwrap(),
+                merkle_root: Digest::from_bytes(&buf[MERKLE_ROOT.0..MERKLE_ROOT.1]).unwrap(),
                 prev_hash: Digest::from_bytes(&buf[PREV_HASH.0..PREV_HASH.1]).unwrap(),
             }
         }
@@ -71,7 +71,7 @@ pub mod off_chain {
             buf[USER_ID.0..USER_ID.1].clone_from_slice(&self.user_id.to_le_bytes()[..]);
             buf[VERSION.0..VERSION.1].clone_from_slice(&self.version.to_le_bytes()[..]);
             buf[DATA_SIZE.0..DATA_SIZE.1].clone_from_slice(&self.data_size.to_le_bytes()[..]);
-            buf[DATA_HASH.0..DATA_HASH.1].clone_from_slice(self.data_hash.as_bytes().unwrap());
+            buf[MERKLE_ROOT.0..MERKLE_ROOT.1].clone_from_slice(self.merkle_root.as_bytes().unwrap());
             buf[PREV_HASH.0..PREV_HASH.1].clone_from_slice(self.prev_hash.as_bytes().unwrap());
         }
     }
@@ -98,7 +98,7 @@ pub mod off_chain {
             if !path.exists() || path.is_dir() {
                 return Err(Error::new(
                     ErrorKind::Other,
-                    "File size is not a multiple of block size.",
+                    "Invalid path.",
                 ))
             }
             let file: File = File::options().write(true).read(true).open(path)?;
@@ -112,7 +112,7 @@ pub mod off_chain {
                 Err(Error::new(ErrorKind::Other, "File is empty."))
             } else if size % BLOCK_SIZE as u64 != 0 {
                 Err(Error::new(
-                    ErrorKind::InvalidInput,
+                    ErrorKind::Other,
                     "File size is not a multiple of block size.",
                 ))
             } else {
@@ -155,7 +155,7 @@ pub mod off_chain {
             }
         }
 
-        pub fn read_block_at(&mut self, index: u64) -> ioResult<Block> {
+        pub fn read_block_at(&mut self, mut index: u64) -> ioResult<Block> {
             index = index.checked_mul(BLOCK_SIZE as u64).ok_or_else(|| {
                 Error::new(
                     ErrorKind::Other,
@@ -169,14 +169,14 @@ pub mod off_chain {
         }
 
         pub fn calc_last_block_digest(&mut self, digest: &mut Digest) -> ioResult<()> {
-            self.inner.seek(SeekFrom::End(-(BLOCK_SIZE as i64)));
+            self.inner.seek(SeekFrom::End(-(BLOCK_SIZE as i64)))?;
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             self.inner.read_exact(&mut buf)?;
             Digest::calculate(digest, &mut Vec::from(buf));
             Ok(())
         }
 
-        pub fn read_blocks_in(&self, range: Range<u64>) -> ioResult<BlockChain> {
+        pub fn read_blocks_in(&mut self, range: Range<u64>) -> ioResult<BlockChain> {
             let mut chain: BlockChain = BlockChain::new();
             for index in range {
                 chain.push(self.read_block_at(index)?);
@@ -191,11 +191,11 @@ pub mod off_chain {
     }
 
     impl BlockChainFileWriter {
-        pub fn new(file: &BlockChainFile) -> Self {
+        pub fn new(file: BlockChainFile) -> Self {
             Self { inner: BufWriter::new(file.inner) }
         }
 
-        pub fn append(&self, block: &mut Block) -> ioResult<()> {
+        pub fn append(&mut self, block: &mut Block) -> ioResult<()> {
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             block.deserialize(&mut buf);
             self.inner.seek(SeekFrom::End(0))?;
@@ -203,7 +203,7 @@ pub mod off_chain {
             self.inner.flush()
         }
 
-        pub fn append_all(&self, blocks: &BlockChain) -> ioResult<()> {
+        pub fn append_all(&mut self, blocks: &BlockChain) -> ioResult<()> {
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             self.inner.seek(SeekFrom::End(0))?;
             for block in blocks {
