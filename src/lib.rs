@@ -66,7 +66,7 @@ pub mod off_chain {
             }
         }
 
-        pub fn deserialize(&mut self, buf: &mut [u8; BLOCK_SIZE]) {
+        pub fn deserialize(&self, buf: &mut [u8; BLOCK_SIZE]) {
             buf[TIMESTAMP.0..TIMESTAMP.1].clone_from_slice(&self.timestamp.to_le_bytes()[..]);
             buf[USER_ID.0..USER_ID.1].clone_from_slice(&self.user_id.to_le_bytes()[..]);
             buf[VERSION.0..VERSION.1].clone_from_slice(&self.version.to_le_bytes()[..]);
@@ -85,53 +85,51 @@ pub mod off_chain {
 
     impl BlockChainFile {
         pub fn create_new(path: &Path, genisis_block: &Block) -> ioResult<BlockChainFile> {
-            if path.try_exists()? {
-                return Err(Error::new(ErrorKind::Other, "Path already exists."));
-            }
-            if path.is_dir() {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    "BlockChainFile can not be created from a directory.",
-                ));
-            }
-            let file_path: &str = path
-                .to_str()
-                .ok_or(Error::new(ErrorKind::Other, "Invalid path."))?;
-            let bc: BlockChainFile = BlockChainFile {
-                inner: File::create(file_path)?,
-            };
+            let mut file: File = File::options().write(true).read(true).create_new(true).open(path)?;
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             genisis_block.deserialize(&mut buf);
-            bc.inner.write_all(&buf)?;
-            bc.inner.flush()?;
-            Ok(bc)
+            file.write_all(&buf)?;
+            file.flush()?;
+            Ok(Self { inner: file })
         }
 
         /// Creates a new BlockChain object from an existing file in the local file system.
         pub fn open_existing(path: &Path) -> ioResult<BlockChainFile> {
-            let file_path = path
-                .to_str()
-                .ok_or(Error::new(ErrorKind::Other, "Invalid path."))?;
-            let file: File = File::open(file_path)?;
-            let file_size: u64 = file.metadata()?.len();
-            if file_size == 0 {
+            if !path.exists() || path.is_dir() {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "File size is not a multiple of block size.",
+                ))
+            }
+            let file: File = File::options().write(true).read(true).open(path)?;
+            Self::validate(&file)?;
+            Ok(Self { inner: file })
+        }
+
+        fn validate(file: &File) -> ioResult<()> {
+            let size: u64 = file.metadata()?.len();
+            if size == 0 {
                 Err(Error::new(ErrorKind::Other, "File is empty."))
-            } else if file_size % BLOCK_SIZE as u64 != 0 {
+            } else if size % BLOCK_SIZE as u64 != 0 {
                 Err(Error::new(
                     ErrorKind::InvalidInput,
                     "File size is not a multiple of block size.",
                 ))
             } else {
-                Ok(BlockChainFile { inner: file })
+                Ok(())
             }
         }
 
-        pub fn file_size(&self) -> ioResult<u64> {
+        pub fn is_valid(&self) -> ioResult<()> {
+            Self::validate(&self.inner)
+        }
+
+        pub fn size(&self) -> ioResult<u64> {
             Ok(self.inner.metadata()?.len())
         }
 
         pub fn block_count(&self) -> ioResult<u64> {
-            let file_size: u64 = self.file_size()?;
+            let file_size: u64 = self.size()?;
             if file_size == 0 {
                 Ok(0)
             } else if file_size % BLOCK_SIZE as u64 == 0 {
@@ -151,13 +149,13 @@ pub mod off_chain {
     }
 
     impl BlockChainFileReader {
-        pub fn new(file: &BlockChainFile) -> BlockChainFileReader {
+        pub fn new(file: BlockChainFile) -> BlockChainFileReader {
             Self {
                 inner: BufReader::new(file.inner),
             }
         }
 
-        pub fn read_block_at(&self, index: u64) -> ioResult<Block> {
+        pub fn read_block_at(&mut self, index: u64) -> ioResult<Block> {
             index = index.checked_mul(BLOCK_SIZE as u64).ok_or_else(|| {
                 Error::new(
                     ErrorKind::Other,
@@ -170,11 +168,11 @@ pub mod off_chain {
             Ok(Block::serialize(&buf))
         }
 
-        pub fn calc_last_block_digest(&self, digest: &mut Digest) -> ioResult<()> {
+        pub fn calc_last_block_digest(&mut self, digest: &mut Digest) -> ioResult<()> {
             self.inner.seek(SeekFrom::End(-(BLOCK_SIZE as i64)));
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             self.inner.read_exact(&mut buf)?;
-            Digest::calculate(digest, &buf);
+            Digest::calculate(digest, &mut Vec::from(buf));
             Ok(())
         }
 
