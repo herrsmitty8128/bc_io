@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     ];
     
     let path: &Path = Path::new("./test.bc");
-    write_blocks(path, &mut blocks);
+    write_blocks(path, &mut blocks)?;
     read_blocks(path)?;
 
     Ok(())
