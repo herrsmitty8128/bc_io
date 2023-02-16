@@ -1,6 +1,6 @@
 pub mod off_chain {
     use chrono::Utc;
-    use sha2::sha256::{Digest, DIGEST_BYTES};
+    use sha2::sha256::{Digest};
     use std::fs::File;
     use std::io::{
         BufReader, BufWriter, Error, ErrorKind, Read, Result as ioResult, Seek, SeekFrom, Write,
@@ -26,12 +26,12 @@ pub mod off_chain {
 
     /// Constants to help manage field offsets and sizes when serializing/deserializing.
     pub const TIMESTAMP: (usize, usize) = (0, 8);
-    pub const USER_ID: (usize, usize) = (8, 8);
-    pub const VERSION: (usize, usize) = (16, 8);
-    pub const DATA_SIZE: (usize, usize) = (24, 8);
-    pub const MERKLE_ROOT: (usize, usize) = (32, DIGEST_BYTES);
-    pub const PREV_HASH: (usize, usize) = (32 + DIGEST_BYTES, DIGEST_BYTES);
-    pub const BLOCK_SIZE: usize = 32 + (DIGEST_BYTES * 2);
+    pub const USER_ID: (usize, usize) = (8, 16);
+    pub const VERSION: (usize, usize) = (16, 24);
+    pub const DATA_SIZE: (usize, usize) = (24, 32);
+    pub const MERKLE_ROOT: (usize, usize) = (32, 64);
+    pub const PREV_HASH: (usize, usize) = (64, 96);
+    pub const BLOCK_SIZE: usize = 96;
 
     #[derive(Debug, Clone)]
     pub struct Block {
@@ -44,15 +44,15 @@ pub mod off_chain {
     }
 
     impl Block {
-        pub fn new(user_id: u64, version: u64, data: &[u8]) -> Result<Block, String> {
-            Ok(Self {
+        pub fn new(user_id: u64, version: u64, data: &[u8]) -> Self {
+            Self {
                 timestamp: Utc::now().timestamp(),
                 user_id,
                 version,
                 data_size: data.len() as u64,
                 merkle_root: Digest::from(data),
                 prev_hash: Digest::default(),
-            })
+            }
         }
 
         pub fn serialize(buf: &[u8; BLOCK_SIZE]) -> Block {
@@ -71,12 +71,13 @@ pub mod off_chain {
             buf[USER_ID.0..USER_ID.1].clone_from_slice(&self.user_id.to_le_bytes()[..]);
             buf[VERSION.0..VERSION.1].clone_from_slice(&self.version.to_le_bytes()[..]);
             buf[DATA_SIZE.0..DATA_SIZE.1].clone_from_slice(&self.data_size.to_le_bytes()[..]);
-            buf[MERKLE_ROOT.0..MERKLE_ROOT.1].clone_from_slice(self.merkle_root.as_bytes().unwrap());
+            buf[MERKLE_ROOT.0..MERKLE_ROOT.1]
+                .clone_from_slice(self.merkle_root.as_bytes().unwrap());
             buf[PREV_HASH.0..PREV_HASH.1].clone_from_slice(self.prev_hash.as_bytes().unwrap());
         }
     }
 
-    type BlockChain = Vec<Block>;
+    pub type BlockChain = Vec<Block>;
 
     #[derive(Debug)]
     pub struct BlockChainFile {
@@ -85,7 +86,11 @@ pub mod off_chain {
 
     impl BlockChainFile {
         pub fn create_new(path: &Path, genisis_block: &Block) -> ioResult<BlockChainFile> {
-            let mut file: File = File::options().write(true).read(true).create_new(true).open(path)?;
+            let mut file: File = File::options()
+                .write(true)
+                .read(true)
+                .create_new(true)
+                .open(path)?;
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             genisis_block.deserialize(&mut buf);
             file.write_all(&buf)?;
@@ -96,17 +101,14 @@ pub mod off_chain {
         /// Creates a new BlockChain object from an existing file in the local file system.
         pub fn open_existing(path: &Path) -> ioResult<BlockChainFile> {
             if !path.exists() || path.is_dir() {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    "Invalid path.",
-                ))
+                return Err(Error::new(ErrorKind::Other, "Invalid path."));
             }
             let file: File = File::options().write(true).read(true).open(path)?;
-            Self::validate(&file)?;
+            Self::validate_size(&file)?;
             Ok(Self { inner: file })
         }
 
-        fn validate(file: &File) -> ioResult<()> {
+        fn validate_size(file: &File) -> ioResult<()> {
             let size: u64 = file.metadata()?.len();
             if size == 0 {
                 Err(Error::new(ErrorKind::Other, "File is empty."))
@@ -120,8 +122,8 @@ pub mod off_chain {
             }
         }
 
-        pub fn is_valid(&self) -> ioResult<()> {
-            Self::validate(&self.inner)
+        pub fn is_valid_size(&self) -> ioResult<()> {
+            Self::validate_size(&self.inner)
         }
 
         pub fn size(&self) -> ioResult<u64> {
@@ -168,13 +170,13 @@ pub mod off_chain {
             Ok(Block::serialize(&buf))
         }
 
-        pub fn calc_last_block_digest(&mut self, digest: &mut Digest) -> ioResult<()> {
+        /*pub fn calc_last_block_digest(&mut self, digest: &mut Digest) -> ioResult<()> {
             self.inner.seek(SeekFrom::End(-(BLOCK_SIZE as i64)))?;
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             self.inner.read_exact(&mut buf)?;
             Digest::calculate(digest, &mut Vec::from(buf));
             Ok(())
-        }
+        }*/
 
         pub fn read_blocks_in(&mut self, range: Range<u64>) -> ioResult<BlockChain> {
             let mut chain: BlockChain = BlockChain::new();
@@ -187,12 +189,19 @@ pub mod off_chain {
 
     #[derive(Debug)]
     pub struct BlockChainFileWriter {
-        inner: BufWriter<File>
+        inner: BufWriter<File>,
+        last_hash: Digest,
     }
 
     impl BlockChainFileWriter {
-        pub fn new(file: BlockChainFile) -> Self {
-            Self { inner: BufWriter::new(file.inner) }
+        pub fn new(mut file: BlockChainFile) -> ioResult<Self> {
+            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
+            file.inner.seek(SeekFrom::End(-(BLOCK_SIZE as i64)))?;
+            file.inner.read_exact(&mut buf)?;
+            Ok(Self {
+                inner: BufWriter::new(file.inner),
+                last_hash: Digest::from(&mut Vec::from(buf)),
+            })
         }
 
         pub fn append(&mut self, block: &mut Block) -> ioResult<()> {
@@ -203,12 +212,14 @@ pub mod off_chain {
             self.inner.flush()
         }
 
-        pub fn append_all(&mut self, blocks: &BlockChain) -> ioResult<()> {
+        pub fn append_all(&mut self, blocks: &mut BlockChain) -> ioResult<()> {
             let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             self.inner.seek(SeekFrom::End(0))?;
             for block in blocks {
+                block.prev_hash = self.last_hash.clone();
                 block.deserialize(&mut buf);
                 self.inner.write_all(&buf)?;
+                self.last_hash = Digest::from(&buf[..]);
             }
             self.inner.flush()
         }
