@@ -2,8 +2,7 @@ use std::path::Path;
 use std::error::Error;
 use std::ops::Range;
 use std::io::Result as ioResult;
-use block_boss::off_chain::{Block, BlockChain, BlockChainFile, BlockChainFileReader, BlockChainFileWriter};
-
+use block_boss::off_chain::{Block, BlockChain, BlockChainFile, BlockChainFileReader, BlockChainFileWriter, BlockWriter, BlockReader};
 
 fn write_blocks(path: &Path, blocks: &mut BlockChain) -> ioResult<()> {
     let file = if path.exists() {
@@ -13,7 +12,7 @@ fn write_blocks(path: &Path, blocks: &mut BlockChain) -> ioResult<()> {
         BlockChainFile::create_new(path, &genisis_block)?
     };
     let mut writer: BlockChainFileWriter = BlockChainFileWriter::new(file)?;
-    writer.append_all(blocks)?;
+    writer.append(blocks)?;
     Ok(())
 }
 
@@ -25,7 +24,7 @@ fn read_blocks(path: &Path) -> std::io::Result<()> {
         BlockChainFile::create_new(path, &genisis_block)?
     };
     let mut reader: BlockChainFileReader = BlockChainFileReader::new(file);
-    let chain: BlockChain = reader.read_blocks_in(Range { start: 0, end: 5 })?;
+    let chain: BlockChain = reader.read(Range { start: 0, end: 5 })?;
     for b in chain {
         println!("{:?}", b);
     }

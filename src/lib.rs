@@ -1,6 +1,6 @@
 pub mod off_chain {
     use chrono::Utc;
-    use sha2::sha256::{Digest};
+    use sha2::sha256::Digest;
     use std::fs::File;
     use std::io::{
         BufReader, BufWriter, Error, ErrorKind, Read, Result as ioResult, Seek, SeekFrom, Write,
@@ -145,19 +145,17 @@ pub mod off_chain {
         }
     }
 
+    pub trait BlockReader<T, X>: Sized {
+        fn read(&mut self, _: T) -> ioResult<X>;
+    }
+
     #[derive(Debug)]
     pub struct BlockChainFileReader {
         inner: BufReader<File>,
     }
 
-    impl BlockChainFileReader {
-        pub fn new(file: BlockChainFile) -> BlockChainFileReader {
-            Self {
-                inner: BufReader::new(file.inner),
-            }
-        }
-
-        pub fn read_block_at(&mut self, mut index: u64) -> ioResult<Block> {
+    impl BlockReader<u64, Block> for BlockChainFileReader {
+        fn read(&mut self, mut index: u64) -> ioResult<Block> {
             index = index.checked_mul(BLOCK_SIZE as u64).ok_or_else(|| {
                 Error::new(
                     ErrorKind::Other,
@@ -169,28 +167,58 @@ pub mod off_chain {
             self.inner.read_exact(&mut buf)?;
             Ok(Block::serialize(&buf))
         }
+    }
 
-        /*pub fn calc_last_block_digest(&mut self, digest: &mut Digest) -> ioResult<()> {
-            self.inner.seek(SeekFrom::End(-(BLOCK_SIZE as i64)))?;
-            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
-            self.inner.read_exact(&mut buf)?;
-            Digest::calculate(digest, &mut Vec::from(buf));
-            Ok(())
-        }*/
-
-        pub fn read_blocks_in(&mut self, range: Range<u64>) -> ioResult<BlockChain> {
+    impl BlockReader<Range<u64>, BlockChain> for BlockChainFileReader {
+        fn read(&mut self, range: Range<u64>) -> ioResult<BlockChain> {
             let mut chain: BlockChain = BlockChain::new();
             for index in range {
-                chain.push(self.read_block_at(index)?);
+                chain.push(self.read(index)?);
             }
             Ok(chain)
         }
+    }
+
+    impl BlockChainFileReader {
+        pub fn new(file: BlockChainFile) -> BlockChainFileReader {
+            Self {
+                inner: BufReader::new(file.inner),
+            }
+        }
+    }
+
+    pub trait BlockWriter<T>: Sized {
+        fn append(&mut self, _: T) -> ioResult<()>;
     }
 
     #[derive(Debug)]
     pub struct BlockChainFileWriter {
         inner: BufWriter<File>,
         last_hash: Digest,
+    }
+
+    impl BlockWriter<&mut Block> for BlockChainFileWriter {
+        fn append(&mut self, block: &mut Block) -> ioResult<()> {
+            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
+            block.deserialize(&mut buf);
+            self.inner.seek(SeekFrom::End(0))?;
+            self.inner.write_all(&buf)?;
+            self.inner.flush()
+        }
+    }
+
+    impl BlockWriter<&mut BlockChain> for BlockChainFileWriter {
+        fn append(&mut self, blocks: &mut BlockChain) -> ioResult<()> {
+            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
+            self.inner.seek(SeekFrom::End(0))?;
+            for block in blocks {
+                block.prev_hash = self.last_hash.clone();
+                block.deserialize(&mut buf);
+                self.inner.write_all(&buf)?;
+                self.last_hash = Digest::from(&buf[..]);
+            }
+            self.inner.flush()
+        }
     }
 
     impl BlockChainFileWriter {
@@ -202,26 +230,6 @@ pub mod off_chain {
                 inner: BufWriter::new(file.inner),
                 last_hash: Digest::from(&mut Vec::from(buf)),
             })
-        }
-
-        pub fn append(&mut self, block: &mut Block) -> ioResult<()> {
-            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
-            block.deserialize(&mut buf);
-            self.inner.seek(SeekFrom::End(0))?;
-            self.inner.write_all(&buf)?;
-            self.inner.flush()
-        }
-
-        pub fn append_all(&mut self, blocks: &mut BlockChain) -> ioResult<()> {
-            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
-            self.inner.seek(SeekFrom::End(0))?;
-            for block in blocks {
-                block.prev_hash = self.last_hash.clone();
-                block.deserialize(&mut buf);
-                self.inner.write_all(&buf)?;
-                self.last_hash = Digest::from(&buf[..]);
-            }
-            self.inner.flush()
         }
     }
 }
