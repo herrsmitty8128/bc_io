@@ -3,6 +3,7 @@ use std::error::Error;
 use std::ops::Range;
 use std::io::Result as ioResult;
 use block_boss::off_chain::{Block, BlockChain, BlockChainFile, BlockChainFileReader, BlockChainFileWriter, BlockWriter, BlockReader};
+use sha2::sha256::Digest;
 
 fn write_blocks(path: &Path, blocks: &mut BlockChain) -> ioResult<()> {
     let file = if path.exists() {
@@ -16,7 +17,7 @@ fn write_blocks(path: &Path, blocks: &mut BlockChain) -> ioResult<()> {
     Ok(())
 }
 
-fn read_blocks(path: &Path) -> std::io::Result<()> {
+fn read_blocks(path: &Path) -> std::io::Result<BlockChain> {
     let file = if path.exists() {
         BlockChainFile::open_existing(path)?
     } else {
@@ -25,10 +26,7 @@ fn read_blocks(path: &Path) -> std::io::Result<()> {
     };
     let mut reader: BlockChainFileReader = BlockChainFileReader::new(file);
     let chain: BlockChain = reader.read(Range { start: 0, end: 5 })?;
-    for b in chain {
-        println!("{:?}", b);
-    }
-    Ok(())
+    Ok(chain)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -42,7 +40,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     let path: &Path = Path::new("./test.bc");
     write_blocks(path, &mut blocks)?;
-    read_blocks(path)?;
-
+    let chain = read_blocks(path)?;
+    println!("chain.len() = {}",chain.len());
+    if chain[3].merkle_root != Digest::from("ddssaaaff".as_bytes()) {
+        println!("Failure");
+    } else {
+        println!("Success");
+    }
     Ok(())
 }

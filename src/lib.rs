@@ -35,12 +35,12 @@ pub mod off_chain {
 
     #[derive(Debug, Clone)]
     pub struct Block {
-        timestamp: i64,
-        user_id: u64,
-        version: u64,
-        data_size: u64,
-        merkle_root: Digest,
-        prev_hash: Digest,
+        pub timestamp: i64,
+        pub user_id: u64,
+        pub version: u64,
+        pub data_size: u64,
+        pub merkle_root: Digest,
+        pub prev_hash: Digest,
     }
 
     impl Block {
@@ -195,27 +195,29 @@ pub mod off_chain {
     pub struct BlockChainFileWriter {
         inner: BufWriter<File>,
         last_hash: Digest,
+        block_buf: [u8; BLOCK_SIZE],
     }
 
     impl BlockWriter<&mut Block> for BlockChainFileWriter {
         fn append(&mut self, block: &mut Block) -> ioResult<()> {
-            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
-            block.deserialize(&mut buf);
+            block.prev_hash = self.last_hash.clone();
+            block.deserialize(&mut self.block_buf);
             self.inner.seek(SeekFrom::End(0))?;
-            self.inner.write_all(&buf)?;
-            self.inner.flush()
+            self.inner.write_all(&self.block_buf)?;
+            self.inner.flush()?;
+            self.last_hash = Digest::from(&self.block_buf[..]);
+            Ok(())
         }
     }
 
     impl BlockWriter<&mut BlockChain> for BlockChainFileWriter {
         fn append(&mut self, blocks: &mut BlockChain) -> ioResult<()> {
-            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             self.inner.seek(SeekFrom::End(0))?;
             for block in blocks {
                 block.prev_hash = self.last_hash.clone();
-                block.deserialize(&mut buf);
-                self.inner.write_all(&buf)?;
-                self.last_hash = Digest::from(&buf[..]);
+                block.deserialize(&mut self.block_buf);
+                self.inner.write_all(&self.block_buf)?;
+                self.last_hash = Digest::from(&self.block_buf[..]);
             }
             self.inner.flush()
         }
@@ -223,12 +225,13 @@ pub mod off_chain {
 
     impl BlockChainFileWriter {
         pub fn new(mut file: BlockChainFile) -> ioResult<Self> {
-            let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
+            let mut block_buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
             file.inner.seek(SeekFrom::End(-(BLOCK_SIZE as i64)))?;
-            file.inner.read_exact(&mut buf)?;
+            file.inner.read_exact(&mut block_buf)?;
             Ok(Self {
                 inner: BufWriter::new(file.inner),
-                last_hash: Digest::from(&mut Vec::from(buf)),
+                last_hash: Digest::from(&block_buf[..]),
+                block_buf
             })
         }
     }
