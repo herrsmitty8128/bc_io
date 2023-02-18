@@ -1,37 +1,40 @@
 use std::path::Path;
-use std::error::Error;
+//use std::error::Error;
 use std::ops::Range;
-use std::io::Result as ioResult;
-use block_boss::off_chain::{Block, BlockChain, BlockChainFile, BlockChainFileReader, BlockChainFileWriter, BlockWriter, BlockReader};
+use block_boss::block_chain::{BlockReader, BlockWriter, Result};
+use block_boss::block_chain::off_chain::{Block, BlockVec, BlockChainFile, BlockChainFileReader, BlockChainFileWriter};
 use sha2::sha256::Digest;
 
-fn write_blocks(path: &Path, blocks: &mut BlockChain) -> ioResult<()> {
-    let file = if path.exists() {
+fn write_blocks(path: &Path, blocks: &mut BlockVec) -> Result<()> {
+    let mut file = if path.exists() {
         BlockChainFile::open_existing(path)?
     } else {
         let genisis_block: Block = Block::new(1234, 5678, "A JE is not a transaction".as_bytes());
         BlockChainFile::create_new(path, &genisis_block)?
     };
-    let mut writer: BlockChainFileWriter = BlockChainFileWriter::new(file)?;
+    println!("{}", file.size().unwrap());
+    let mut writer: BlockChainFileWriter = BlockChainFileWriter::new(&mut file)?;
     writer.append(blocks)?;
+    
+    
     Ok(())
 }
 
-fn read_blocks(path: &Path) -> std::io::Result<BlockChain> {
+fn read_blocks(path: &Path) -> Result<BlockVec> {
     let file = if path.exists() {
         BlockChainFile::open_existing(path)?
     } else {
         let genisis_block: Block = Block::new(1234, 5678, "A JE is not a transaction".as_bytes());
         BlockChainFile::create_new(path, &genisis_block)?
     };
-    let mut reader: BlockChainFileReader = BlockChainFileReader::new(file);
-    let chain: BlockChain = reader.read(Range { start: 0, end: 5 })?;
+    let mut reader: BlockChainFileReader = BlockChainFileReader::new(&file);
+    let chain: BlockVec = reader.read(Range { start: 0, end: 5 })?;
     Ok(chain)
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> { //std::result::Result<(), Box<dyn Error>> {
 
-    let mut blocks: BlockChain = vec![
+    let mut blocks: BlockVec = vec![
         Block::new(1,2,"sdfasfadf".as_bytes()),
         Block::new(1,2,"fdafda".as_bytes()),
         Block::new(1,2,"ddssaaaff".as_bytes()),
