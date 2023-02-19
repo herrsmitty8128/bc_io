@@ -111,6 +111,7 @@ pub mod blockchain {
     }
 
     pub mod file {
+        
         use crate::blockchain::{Block, Error, ErrorKind, Result};
         use sha2::sha256::Digest;
         use std::fs::File;
@@ -142,10 +143,7 @@ pub mod blockchain {
         }
 
         impl<const S: usize> BlockChainFile<S> {
-            pub fn create_new<B: SerialBlock<S>>(
-                path: &Path,
-                genisis_block: &mut B,
-            ) -> Result<BlockChainFile<S>> {
+            pub fn create_new<B: SerialBlock<S>>(path: &Path, genisis_block: &mut B) -> Result<BlockChainFile<S>> {
                 let mut file: File = File::options()
                     .write(true)
                     .read(true)
