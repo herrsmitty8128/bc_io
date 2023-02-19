@@ -118,8 +118,6 @@ pub mod blockchain {
         use std::ops::Range;
         use std::path::Path;
 
-        pub type BlockVec = Vec<dyn Block>;
-
         pub trait SerialBlock<const S: usize>
         where
             Self: Block,
@@ -144,7 +142,10 @@ pub mod blockchain {
         }
 
         impl<const S: usize> BlockChainFile<S> {
-            pub fn create_new<B: SerialBlock<S>>(path: &Path, genisis_block: &mut B) -> Result<BlockChainFile<S>> {
+            pub fn create_new<B: SerialBlock<S>>(
+                path: &Path,
+                genisis_block: &mut B,
+            ) -> Result<BlockChainFile<S>> {
                 let mut file: File = File::options()
                     .write(true)
                     .read(true)
