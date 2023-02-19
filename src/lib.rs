@@ -125,12 +125,12 @@ pub mod blockchain {
             Self: Block,
         {
             /// Transmutate an array of bytes into a new block object.
-            fn serialize(bytes: &[u8; S]) -> Result<Self>
+            fn serialize(buf: &[u8; S]) -> Result<Self>
             where
                 Self: Sized;
 
             /// Transmutate a block into an array of byes.
-            fn deserialize(&self, bytes: &mut [u8; S]) -> Result<()>;
+            fn deserialize(&self, buf: &mut [u8; S]) -> Result<()>;
 
             #[inline]
             fn block_size(&self) -> usize {
@@ -245,29 +245,29 @@ pub mod blockchain {
         pub struct BlockChainFileWriter<'a, const S: usize> {
             inner: BufWriter<&'a File>,
             last_hash: Digest,
-            block_buf: [u8; S],
+            buf: [u8; S],
         }
 
         #[allow(dead_code)]
         impl<'a, const S: usize> BlockChainFileWriter<'a, S> {
             pub fn new(file: &'a mut BlockChainFile<S>) -> Result<Self> {
-                let mut block_buf: [u8; S] = [0; S];
+                let mut buf: [u8; S] = [0; S];
                 file.inner.seek(SeekFrom::End(-(S as i64)))?;
-                file.inner.read_exact(&mut block_buf)?;
+                file.inner.read_exact(&mut buf)?;
                 Ok(Self {
                     inner: BufWriter::new(&file.inner),
-                    last_hash: Digest::from(&block_buf[..]),
-                    block_buf,
+                    last_hash: Digest::from(&buf[..]),
+                    buf,
                 })
             }
 
             fn write<B: SerialBlock<S>>(&mut self, block: &mut B) -> Result<()> {
                 block.set_prev_digest(&self.last_hash);
-                block.deserialize(&mut self.block_buf)?;
+                block.deserialize(&mut self.buf)?;
                 self.inner.seek(SeekFrom::End(0))?;
-                self.inner.write_all(&self.block_buf)?;
+                self.inner.write_all(&self.buf)?;
                 self.inner.flush()?;
-                self.last_hash = Digest::from(&self.block_buf[..]);
+                self.last_hash = Digest::from(&self.buf[..]);
                 Ok(())
             }
 
@@ -275,9 +275,9 @@ pub mod blockchain {
                 self.inner.seek(SeekFrom::End(0))?;
                 for mut block in blocks {
                     block.set_prev_digest(&self.last_hash);
-                    block.deserialize(&mut self.block_buf)?;
-                    self.inner.write_all(&self.block_buf)?;
-                    self.last_hash = Digest::from(&self.block_buf[..]);
+                    block.deserialize(&mut self.buf)?;
+                    self.inner.write_all(&self.buf)?;
+                    self.last_hash = Digest::from(&self.buf[..]);
                 }
                 self.inner.flush().map_err(|err| Error::from(err))
             }
