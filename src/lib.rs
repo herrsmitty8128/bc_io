@@ -207,6 +207,7 @@ pub mod blockchain {
         #[allow(dead_code)]
         pub struct BlockChainFileReader<'a, const S: usize> {
             inner: BufReader<&'a File>,
+            buf: [u8; S],
         }
 
         #[allow(dead_code)]
@@ -214,6 +215,7 @@ pub mod blockchain {
             pub fn new(file: &'a BlockChainFile<S>) -> BlockChainFileReader<'a, S> {
                 Self {
                     inner: BufReader::new(&file.inner),
+                    buf: [0; S],
                 }
             }
 
@@ -224,10 +226,9 @@ pub mod blockchain {
                         "Integer overflowed when calculating file position.",
                     )
                 })?;
-                let mut buf: [u8; S] = [0; S];
                 self.inner.seek(SeekFrom::Start(index))?;
-                self.inner.read_exact(&mut buf)?;
-                B::serialize(&buf)
+                self.inner.read_exact(&mut self.buf)?;
+                B::serialize(&self.buf)
             }
 
             fn read_all<B: SerialBlock<S>>(&mut self, range: Range<u64>) -> Result<Vec<B>> {
