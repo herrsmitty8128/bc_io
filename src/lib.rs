@@ -83,7 +83,7 @@ pub mod blockchain {
         fn set_prev_digest(&mut self, digest: &Digest);
 
         /// Calculates and returns the block's digest
-        fn digest(&self) -> Digest;
+        fn digest(&self) -> Result<Digest>;
     }
 
     pub trait BlockChain<B: Block> {
@@ -92,13 +92,13 @@ pub mod blockchain {
 
         /// Returns the digest of the last block in the chain. A blockchain object
         /// should generally keep track of the last block's digest.
-        fn state(&self) -> Result<&Digest>;
+        fn state(&self) -> Result<Digest>;
 
         /// Determines if a data is contained in the blockchain.
         fn contains(&self, block_num: usize, position: usize, data: &[u8]) -> Result<bool>;
 
         /// Attempts to append a new block to the end of the blockchain.
-        fn append(&mut self, block: &B) -> Result<()>;
+        fn append(&mut self, block: &mut B) -> Result<()>;
 
         /// Attempts to append a vector of the blocks to the end of the blockchain.
         fn extend(&mut self, blocks: &mut Vec<B>) -> Result<()>;
@@ -107,15 +107,15 @@ pub mod blockchain {
         fn get(&self, block_num: u64) -> Result<B>;
 
         /// Returns the number of blocks in the blockchain
-        fn count(&self) -> usize;
+        fn count(&self) -> Result<u64>;
     }
 
     pub mod file {
         
         use crate::blockchain::{Block, Error, ErrorKind, Result};
         use sha2::sha256::Digest;
-        use std::fs::File;
-        use std::io::{BufReader, BufWriter, Read, Result as ioResult, Seek, SeekFrom, Write};
+        use std::fs;
+        use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
         use std::ops::Range;
         use std::path::Path;
 
@@ -138,13 +138,13 @@ pub mod blockchain {
         }
 
         #[derive(Debug)]
-        pub struct BlockChainFile<const S: usize> {
-            inner: File,
+        pub struct File<const S: usize> {
+            inner: std::fs::File,
         }
 
-        impl<const S: usize> BlockChainFile<S> {
-            pub fn create_new<B: SerialBlock<S>>(path: &Path, genisis_block: &mut B) -> Result<BlockChainFile<S>> {
-                let mut file: File = File::options()
+        impl<const S: usize> File<S> {
+            pub fn create_new<B: SerialBlock<S>>(path: &Path, genisis_block: &mut B) -> Result<File<S>> {
+                let mut file: fs::File = fs::File::options()
                     .write(true)
                     .read(true)
                     .create_new(true)
@@ -157,16 +157,16 @@ pub mod blockchain {
             }
 
             /// Creates a new BlockChain object from an existing file in the local file system.
-            pub fn open_existing(path: &Path) -> Result<BlockChainFile<S>> {
+            pub fn open_existing(path: &Path) -> Result<File<S>> {
                 if !path.exists() || path.is_dir() {
                     return Err(Error::new(ErrorKind::Other, "Invalid path."));
                 }
-                let file: File = File::options().write(true).read(true).open(path)?;
+                let file: fs::File = fs::File::options().write(true).read(true).open(path)?;
                 Self::validate_size(&file)?;
                 Ok(Self { inner: file })
             }
 
-            fn validate_size(file: &File) -> Result<()> {
+            fn validate_size(file: &fs::File) -> Result<()> {
                 let size: u64 = file.metadata()?.len();
                 if size == 0 {
                     Err(Error::new(ErrorKind::Other, "File is empty."))
@@ -184,11 +184,11 @@ pub mod blockchain {
                 Self::validate_size(&self.inner)
             }
 
-            pub fn size(&self) -> ioResult<u64> {
+            pub fn size(&self) -> Result<u64> {
                 Ok(self.inner.metadata()?.len())
             }
 
-            pub fn count(&mut self) -> Result<u64> {
+            pub fn count(&self) -> Result<u64> {
                 let file_size: u64 = self.size()?;
                 if file_size == 0 {
                     Ok(0)
@@ -205,21 +205,21 @@ pub mod blockchain {
 
         #[derive(Debug)]
         #[allow(dead_code)]
-        pub struct BlockChainFileReader<'a, const S: usize> {
-            inner: BufReader<&'a File>,
+        pub struct Reader<'a, const S: usize> {
+            inner: BufReader<&'a fs::File>,
             buf: [u8; S],
         }
 
         #[allow(dead_code)]
-        impl<'a, const S: usize> BlockChainFileReader<'a, S> {
-            pub fn new(file: &'a BlockChainFile<S>) -> BlockChainFileReader<'a, S> {
+        impl<'a, const S: usize> Reader<'a, S> {
+            pub fn new(file: &'a File<S>) -> Reader<'a, S> {
                 Self {
                     inner: BufReader::new(&file.inner),
                     buf: [0; S],
                 }
             }
 
-            fn read<B: SerialBlock<S>>(&mut self, mut index: u64) -> Result<B> {
+            pub fn read<B: SerialBlock<S>>(&mut self, mut index: u64) -> Result<B> {
                 index = index.checked_mul(S as u64).ok_or_else(|| {
                     Error::new(
                         ErrorKind::Other,
@@ -231,7 +231,7 @@ pub mod blockchain {
                 B::serialize(&self.buf)
             }
 
-            fn read_all<B: SerialBlock<S>>(&mut self, range: Range<u64>) -> Result<Vec<B>> {
+            pub fn read_all<B: SerialBlock<S>>(&mut self, range: Range<u64>) -> Result<Vec<B>> {
                 let mut chain: Vec<B> = Vec::new();
                 for index in range {
                     chain.push(self.read(index)?);
@@ -242,15 +242,15 @@ pub mod blockchain {
 
         #[derive(Debug)]
         #[allow(dead_code)]
-        pub struct BlockChainFileWriter<'a, const S: usize> {
-            inner: BufWriter<&'a File>,
+        pub struct Writer<'a, const S: usize> {
+            inner: BufWriter<&'a fs::File>,
             last_hash: Digest,
             buf: [u8; S],
         }
 
         #[allow(dead_code)]
-        impl<'a, const S: usize> BlockChainFileWriter<'a, S> {
-            pub fn new(file: &'a mut BlockChainFile<S>) -> Result<Self> {
+        impl<'a, const S: usize> Writer<'a, S> {
+            pub fn new(file: &'a mut File<S>) -> Result<Self> {
                 let mut buf: [u8; S] = [0; S];
                 file.inner.seek(SeekFrom::End(-(S as i64)))?;
                 file.inner.read_exact(&mut buf)?;
@@ -261,7 +261,7 @@ pub mod blockchain {
                 })
             }
 
-            fn write<B: SerialBlock<S>>(&mut self, block: &mut B) -> Result<()> {
+            pub fn write<B: SerialBlock<S>>(&mut self, block: &mut B) -> Result<()> {
                 block.set_prev_digest(&self.last_hash);
                 block.deserialize(&mut self.buf)?;
                 self.inner.seek(SeekFrom::End(0))?;
@@ -271,14 +271,16 @@ pub mod blockchain {
                 Ok(())
             }
 
-            fn write_all<B: SerialBlock<S>>(&mut self, blocks: Vec<B>) -> Result<()> {
+            pub fn write_all<B: SerialBlock<S>>(&mut self, blocks: &mut Vec<B>) -> Result<()> {
                 self.inner.seek(SeekFrom::End(0))?;
-                for mut block in blocks {
+                for block in blocks {
                     block.set_prev_digest(&self.last_hash);
                     block.deserialize(&mut self.buf)?;
                     self.inner.write_all(&self.buf)?;
                     self.last_hash = Digest::from(&self.buf[..]);
                 }
+                // need to research this when I have more time!!!!!!!!!!!!!!!!!!!!!!!
+                #[allow(clippy::redundant_closure)]
                 self.inner.flush().map_err(|err| Error::from(err))
             }
         }
