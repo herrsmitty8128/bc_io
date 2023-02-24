@@ -2,85 +2,49 @@ pub mod blockchain {
 
     use sha2::sha256::Digest;
     use std::fmt::{Display, Formatter, Result as FmtResult};
-    use std::result::Result as StdResult;
 
-    #[derive(Debug, Clone, Copy)]
-    pub enum ErrorKind {
-        IOError(isize),
-        Other,
-    }
-
-    impl ErrorKind {
-        pub(crate) fn as_str(&self) -> &'static str {
-            use ErrorKind::*;
-            match *self {
-                IOError(_) => "std::io::Error",
-                Other => "Some other kind of error",
-            }
-        }
-    }
-
-    impl Display for ErrorKind {
-        fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
-            fmt.write_str(self.as_str())
-        }
-    }
-
-    impl From<std::io::ErrorKind> for ErrorKind {
-        fn from(k: std::io::ErrorKind) -> Self {
-            ErrorKind::IOError(k as isize)
-        }
-    }
-
-    #[derive(Debug)]
-    #[allow(dead_code)]
-    pub struct Error {
-        kind: ErrorKind,
-        message: String,
-    }
-
-    impl From<std::io::Error> for Error {
-        fn from(err: std::io::Error) -> Self {
-            Self {
-                kind: ErrorKind::from(err.kind()),
-                message: err.to_string(),
-            }
-        }
-    }
-
-    impl From<ErrorKind> for Error {
-        #[inline]
-        fn from(kind: ErrorKind) -> Error {
-            Error {
-                kind,
-                message: kind.to_string(),
-            }
-        }
+    #[derive(Debug, Clone)]
+    pub enum Error {
+        PathAlreadyExists,
+        PathIsNotAFile,
+        FileIsEmpty,
+        IntegerOverflow,
+        InvalidFileSize,
+        IOError(std::io::ErrorKind),
     }
 
     impl Display for Error {
-        fn fmt(&self, f: &mut Formatter) -> FmtResult {
-            write!(f, "{}", self.message)
-        }
-    }
-
-    impl Error {
-        fn new(kind: ErrorKind, message: &'static str) -> Self {
-            Self {
-                kind,
-                message: String::from(message),
+        fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+            use Error::*;
+            match self {
+                PathAlreadyExists => fmt.write_str("The file path already exists."),
+                PathIsNotAFile => fmt.write_str("The file path is not a file."),
+                FileIsEmpty => fmt.write_str("File is empty."),
+                InvalidFileSize => fmt.write_str("File size is not a multiple of block size."),
+                IntegerOverflow => {
+                    fmt.write_str("Integer overflowed when calculating file position.")
+                }
+                IOError(e) => fmt.write_str(e.to_string().as_str()),
             }
         }
     }
 
-    pub type Result<T> = StdResult<T, Error>;
+    impl From<std::io::Error> for Error {
+        fn from(e: std::io::Error) -> Self {
+            Error::IOError(e.kind())
+        }
+    }
+
+    impl std::error::Error for Error {}
+
+    pub type Result<T> = std::result::Result<T, Error>;
 
     pub trait Block {
         /// Returns a reference to the previous block's digest, which is a member of self.
-        fn prev_digest(&self) -> &Digest;
+        fn prev_digest(&self) -> &mut Digest;
 
         /// Clones *digest* into the current block's previous digest
-        fn set_prev_digest(&mut self, digest: &Digest);
+        //fn set_prev_digest(&mut self, digest: &Digest);
 
         /// Calculates and returns the block's digest
         fn digest(&self) -> Result<Digest>;
@@ -111,8 +75,8 @@ pub mod blockchain {
     }
 
     pub mod file {
-        
-        use crate::blockchain::{Block, Error, ErrorKind, Result};
+
+        use crate::blockchain::{Block, Error, Result};
         use sha2::sha256::Digest;
         use std::fs;
         use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -139,11 +103,14 @@ pub mod blockchain {
 
         #[derive(Debug)]
         pub struct File<const S: usize> {
-            inner: std::fs::File,
+            inner: fs::File,
         }
 
         impl<const S: usize> File<S> {
-            pub fn create_new<B: SerialBlock<S>>(path: &Path, genisis_block: &mut B) -> Result<File<S>> {
+            pub fn create_new<B: SerialBlock<S>>(
+                path: &Path,
+                genisis_block: &mut B,
+            ) -> Result<File<S>> {
                 let mut file: fs::File = fs::File::options()
                     .write(true)
                     .read(true)
@@ -158,8 +125,11 @@ pub mod blockchain {
 
             /// Creates a new BlockChain object from an existing file in the local file system.
             pub fn open_existing(path: &Path) -> Result<File<S>> {
-                if !path.exists() || path.is_dir() {
-                    return Err(Error::new(ErrorKind::Other, "Invalid path."));
+                if !path.exists() {
+                    return Err(Error::PathAlreadyExists);
+                }
+                if path.is_dir() {
+                    return Err(Error::PathIsNotAFile);
                 }
                 let file: fs::File = fs::File::options().write(true).read(true).open(path)?;
                 Self::validate_size(&file)?;
@@ -169,12 +139,9 @@ pub mod blockchain {
             fn validate_size(file: &fs::File) -> Result<()> {
                 let size: u64 = file.metadata()?.len();
                 if size == 0 {
-                    Err(Error::new(ErrorKind::Other, "File is empty."))
+                    Err(Error::FileIsEmpty)
                 } else if size % S as u64 != 0 {
-                    Err(Error::new(
-                        ErrorKind::Other,
-                        "File size is not a multiple of block size.",
-                    ))
+                    Err(Error::InvalidFileSize)
                 } else {
                     Ok(())
                 }
@@ -191,14 +158,11 @@ pub mod blockchain {
             pub fn count(&self) -> Result<u64> {
                 let file_size: u64 = self.size()?;
                 if file_size == 0 {
-                    Ok(0)
-                } else if file_size % S as u64 == 0 {
-                    Ok((file_size / S as u64) as u64)
+                    Err(Error::FileIsEmpty)
+                } else if file_size % S as u64 != 0 {
+                    Err(Error::InvalidFileSize)
                 } else {
-                    Err(Error::new(
-                        ErrorKind::Other,
-                        "File size is not a multiple of block size.",
-                    ))
+                    Ok((file_size / S as u64) as u64)
                 }
             }
         }
@@ -220,12 +184,7 @@ pub mod blockchain {
             }
 
             pub fn read<B: SerialBlock<S>>(&mut self, mut index: u64) -> Result<B> {
-                index = index.checked_mul(S as u64).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::Other,
-                        "Integer overflowed when calculating file position.",
-                    )
-                })?;
+                index = index.checked_mul(S as u64).ok_or(Error::IntegerOverflow)?;
                 self.inner.seek(SeekFrom::Start(index))?;
                 self.inner.read_exact(&mut self.buf)?;
                 B::serialize(&self.buf)
@@ -262,7 +221,8 @@ pub mod blockchain {
             }
 
             pub fn write<B: SerialBlock<S>>(&mut self, block: &mut B) -> Result<()> {
-                block.set_prev_digest(&self.last_hash);
+                //block.set_prev_digest(&self.last_hash);
+                *block.prev_digest() = self.last_hash.clone();
                 block.deserialize(&mut self.buf)?;
                 self.inner.seek(SeekFrom::End(0))?;
                 self.inner.write_all(&self.buf)?;
@@ -274,14 +234,13 @@ pub mod blockchain {
             pub fn write_all<B: SerialBlock<S>>(&mut self, blocks: &mut Vec<B>) -> Result<()> {
                 self.inner.seek(SeekFrom::End(0))?;
                 for block in blocks {
-                    block.set_prev_digest(&self.last_hash);
+                    //block.set_prev_digest(&self.last_hash);
+                    *block.prev_digest() = self.last_hash.clone();
                     block.deserialize(&mut self.buf)?;
                     self.inner.write_all(&self.buf)?;
                     self.last_hash = Digest::from(&self.buf[..]);
                 }
-                // need to research this when I have more time!!!!!!!!!!!!!!!!!!!!!!!
-                #[allow(clippy::redundant_closure)]
-                self.inner.flush().map_err(|err| Error::from(err))
+                self.inner.flush().map_err(Error::from)
             }
         }
     }
