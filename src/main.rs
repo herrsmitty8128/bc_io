@@ -53,21 +53,13 @@ impl Block for MyBlock {
         Ok(Digest::from(&buf[..]))
     }
 
-    fn prev_digest(&self) -> &Digest {
-        &self.prev_hash
-    }
-
-    fn set_prev_digest(&mut self, digest: &Digest) {
-        self.prev_hash = digest.clone();
+    fn prev_digest(&mut self) -> &mut Digest {
+        &mut self.prev_hash
     }
     
 }
 
 impl SerialBlock<BLOCK_SIZE> for MyBlock {
-    fn block_size(&self) -> usize {
-        BLOCK_SIZE
-    }
-
     fn deserialize(&self, buf: &mut [u8; BLOCK_SIZE]) -> Result<()> {
         buf[TIMESTAMP.0..TIMESTAMP.1].clone_from_slice(&self.timestamp.to_le_bytes()[..]);
         buf[USER_ID.0..USER_ID.1].clone_from_slice(&self.user_id.to_le_bytes()[..]);

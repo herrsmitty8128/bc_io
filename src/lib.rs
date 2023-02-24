@@ -41,7 +41,7 @@ pub mod blockchain {
 
     pub trait Block {
         /// Returns a reference to the previous block's digest, which is a member of self.
-        fn prev_digest(&self) -> &mut Digest;
+        fn prev_digest(&mut self) -> &mut Digest;
 
         /// Clones *digest* into the current block's previous digest
         //fn set_prev_digest(&mut self, digest: &Digest);
