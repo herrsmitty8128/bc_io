@@ -44,13 +44,10 @@ pub mod blockchain {
         fn prev_digest(&mut self) -> &mut Digest;
 
         /// Calculates and returns the block's digest
-        fn digest(&self) -> Result<Digest>;
+        fn calc_digest(&self) -> Result<Digest>;
     }
 
     pub trait BlockChain<B: Block> {
-        /// Iterates over the blockchain to validate that all data remains unchanged.
-        fn validate(&self) -> Result<()>;
-
         /// Returns the digest of the last block in the chain. A blockchain object
         /// should generally keep track of the last block's digest.
         fn state(&self) -> Result<Digest>;
@@ -69,6 +66,9 @@ pub mod blockchain {
 
         /// Returns the number of blocks in the blockchain
         fn count(&self) -> Result<u64>;
+
+        /// Iterates over the blockchain to validate that all data remains unchanged.
+        fn validate(&self) -> Result<()>;
     }
 
     pub mod file {
@@ -218,7 +218,6 @@ pub mod blockchain {
             }
 
             pub fn write<B: SerialBlock<S>>(&mut self, block: &mut B) -> Result<()> {
-                //block.set_prev_digest(&self.last_hash);
                 *block.prev_digest() = self.last_hash.clone();
                 block.deserialize(&mut self.buf)?;
                 self.inner.seek(SeekFrom::End(0))?;
@@ -231,7 +230,6 @@ pub mod blockchain {
             pub fn write_all<B: SerialBlock<S>>(&mut self, blocks: &mut Vec<B>) -> Result<()> {
                 self.inner.seek(SeekFrom::End(0))?;
                 for block in blocks {
-                    //block.set_prev_digest(&self.last_hash);
                     *block.prev_digest() = self.last_hash.clone();
                     block.deserialize(&mut self.buf)?;
                     self.inner.write_all(&self.buf)?;

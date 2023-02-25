@@ -1,11 +1,11 @@
-#[allow(unused_imports)]
-use std::path::Path;
+use block_boss::blockchain::file::{File, Reader, SerialBlock, Writer};
+use block_boss::blockchain::{Block, BlockChain, Result};
+use chrono::Utc;
+use sha2::sha256::Digest;
 #[allow(unused_imports)]
 use std::ops::Range;
-use chrono::Utc;
-use block_boss::blockchain::{Block, Result, BlockChain};
-use block_boss::blockchain::file::{ File, Reader, Writer, SerialBlock};
-use sha2::sha256::Digest;
+#[allow(unused_imports)]
+use std::path::Path;
 
 /// #Block Format
 ///
@@ -26,7 +26,6 @@ use sha2::sha256::Digest;
 /// Constants to help manage field offsets and sizes when serializing/deserializing.
 ///
 
-
 pub const TIMESTAMP: (usize, usize) = (0, 8);
 pub const USER_ID: (usize, usize) = (8, 16);
 pub const VERSION: (usize, usize) = (16, 24);
@@ -46,8 +45,7 @@ pub struct MyBlock {
 }
 
 impl Block for MyBlock {
-
-    fn digest(&self) -> Result<Digest> {
+    fn calc_digest(&self) -> Result<Digest> {
         let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
         self.deserialize(&mut buf)?;
         Ok(Digest::from(&buf[..]))
@@ -56,7 +54,6 @@ impl Block for MyBlock {
     fn prev_digest(&mut self) -> &mut Digest {
         &mut self.prev_hash
     }
-    
 }
 
 impl SerialBlock<BLOCK_SIZE> for MyBlock {
@@ -65,25 +62,20 @@ impl SerialBlock<BLOCK_SIZE> for MyBlock {
         buf[USER_ID.0..USER_ID.1].clone_from_slice(&self.user_id.to_le_bytes()[..]);
         buf[VERSION.0..VERSION.1].clone_from_slice(&self.version.to_le_bytes()[..]);
         buf[DATA_SIZE.0..DATA_SIZE.1].clone_from_slice(&self.data_size.to_le_bytes()[..]);
-        buf[MERKLE_ROOT.0..MERKLE_ROOT.1]
-            .clone_from_slice(self.merkle_root.as_bytes().unwrap());
+        buf[MERKLE_ROOT.0..MERKLE_ROOT.1].clone_from_slice(self.merkle_root.as_bytes().unwrap());
         buf[PREV_HASH.0..PREV_HASH.1].clone_from_slice(self.prev_hash.as_bytes().unwrap());
         Ok(())
     }
 
     fn serialize(buf: &[u8; BLOCK_SIZE]) -> Result<Self>
     where
-        Self: Sized
+        Self: Sized,
     {
         Ok(Self {
-            timestamp: i64::from_le_bytes(
-                buf[TIMESTAMP.0..TIMESTAMP.1].try_into().unwrap(),
-            ),
+            timestamp: i64::from_le_bytes(buf[TIMESTAMP.0..TIMESTAMP.1].try_into().unwrap()),
             user_id: u64::from_le_bytes(buf[USER_ID.0..USER_ID.1].try_into().unwrap()),
             version: u64::from_le_bytes(buf[VERSION.0..VERSION.1].try_into().unwrap()),
-            data_size: u64::from_le_bytes(
-                buf[DATA_SIZE.0..DATA_SIZE.1].try_into().unwrap(),
-            ),
+            data_size: u64::from_le_bytes(buf[DATA_SIZE.0..DATA_SIZE.1].try_into().unwrap()),
             merkle_root: Digest::from_bytes(&buf[MERKLE_ROOT.0..MERKLE_ROOT.1]).unwrap(),
             prev_hash: Digest::from_bytes(&buf[PREV_HASH.0..PREV_HASH.1]).unwrap(),
         })
@@ -150,26 +142,31 @@ impl BlockChain<MyBlock> for MyBlockChain {
     }
 }
 
+fn main() -> Result<()> {
+    let data: Vec<&str> = vec!["hello world", "this", "is", "my", "test", "data"];
 
-fn main() -> Result<()> { //std::result::Result<(), Box<dyn Error>> {
-
-    /*
-    let mut blocks: BlockVec = vec![
-        Block::new(1,2,"sdfasfadf".as_bytes()),
-        Block::new(1,2,"fdafda".as_bytes()),
-        Block::new(1,2,"ddssaaaff".as_bytes()),
-        Block::new(1,2,"kj;lkjhalskdjfhlkjhsadf".as_bytes())
-    ];
-    
     let path: &Path = Path::new("./test.bc");
-    write_blocks(path, &mut blocks)?;
-    let chain = read_blocks(path)?;
-    println!("chain.len() = {}",chain.len());
-    if chain[3].merkle_root != Digest::from("ddssaaaff".as_bytes()) {
-        println!("Failure");
-    } else {
-        println!("Success");
+    let mut genisis_block: MyBlock = MyBlock::new(123, 1, "hello world".as_bytes());
+    let file: File<BLOCK_SIZE> = File::create_new(path, &mut genisis_block)?;
+    let mut block_chain: MyBlockChain = MyBlockChain::new(file);
+
+    for b in data.iter().skip(1) {
+        let mut new_block: MyBlock = MyBlock::new(123, 1, b.as_bytes());
+        block_chain.append(&mut new_block)?;
     }
-    */
+
+    for block_num in 0..block_chain.count()? {
+        let block: MyBlock = block_chain.get(block_num)?;
+        let bytes: &[u8] = data[block_num as usize].as_bytes();
+        let digest: Digest = Digest::from(bytes);
+        if digest == block.merkle_root {
+            println!("{:?}", &block);
+        } else {
+            println!("data is not included in the block");
+        }
+    }
+
+    block_chain.validate()?;
+
     Ok(())
 }
