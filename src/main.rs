@@ -1,88 +1,63 @@
-use block_boss::blockchain::file::{File, Reader, SerialBlock, Writer};
-use block_boss::blockchain::{Block, BlockChain, Result};
+use block_boss::blockchain::file::{File, Writer};
+use block_boss::blockchain::{Deserialize, Error as BcError, Result as BcResult, Serialize};
 use chrono::Utc;
 use sha2::sha256::Digest;
+use std::path::Path;
 #[allow(unused_imports)]
 use std::ops::Range;
-#[allow(unused_imports)]
-use std::path::Path;
-
-/// #Block Format
-///
-/// All data in the blockchain is stored off-chain. This means that the blockchain
-/// only stores information about the data, not the data itself. The information
-/// about the data is stored in blocks using the format below.
-///
-/// Field Name              Offset    Size       Description
-/// 1.) timestamp             0       8 bytes    the number of non-leap seconds since January 1, 1970 0:00:00 UTC (aka “UNIX timestamp”)
-/// 2.) user id               8       8 bytes    the ID of the user who requested that the data be added to the blockchain
-/// 3.) data format/version   16      8 bytes    the version or format of the data
-/// 4.) data size             24      8 bytes    the size of the data in bytes
-/// 5.) data hash             32      32 bytes   the SHA-256 digest of the data
-/// 6.) prev block hash       64      32 bytes   the SHA-256 digest of the previous block
-///
-/// Total block size = 96 bytes
-
-/// Constants to help manage field offsets and sizes when serializing/deserializing.
-///
 
 pub const TIMESTAMP: (usize, usize) = (0, 8);
 pub const USER_ID: (usize, usize) = (8, 16);
 pub const VERSION: (usize, usize) = (16, 24);
 pub const DATA_SIZE: (usize, usize) = (24, 32);
 pub const MERKLE_ROOT: (usize, usize) = (32, 64);
-pub const PREV_HASH: (usize, usize) = (64, 96);
-pub const BLOCK_SIZE: usize = 96;
+pub const BLOCK_SIZE: usize = 64;
 
 #[derive(Debug, Clone)]
-pub struct MyBlock {
+pub struct Block {
     pub timestamp: i64,
     pub user_id: u64,
     pub version: u64,
     pub data_size: u64,
     pub merkle_root: Digest,
-    pub prev_hash: Digest,
 }
 
-impl Block for MyBlock {
-    fn calc_digest(&self) -> Result<Digest> {
-        let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
-        self.deserialize(&mut buf)?;
-        Ok(Digest::from(&buf[..]))
-    }
-
-    fn prev_digest(&mut self) -> &mut Digest {
-        &mut self.prev_hash
+impl Serialize for Block {
+    fn serialize(&self, buf: &mut [u8]) -> BcResult<()> {
+        if buf.len() != BLOCK_SIZE {
+            Err(BcError::InvalidSliceLength)
+        } else {
+            buf[TIMESTAMP.0..TIMESTAMP.1].clone_from_slice(&self.timestamp.to_le_bytes()[..]);
+            buf[USER_ID.0..USER_ID.1].clone_from_slice(&self.user_id.to_le_bytes()[..]);
+            buf[VERSION.0..VERSION.1].clone_from_slice(&self.version.to_le_bytes()[..]);
+            buf[DATA_SIZE.0..DATA_SIZE.1].clone_from_slice(&self.data_size.to_le_bytes()[..]);
+            self.merkle_root
+                .serialize(&mut buf[MERKLE_ROOT.0..MERKLE_ROOT.1])?;
+            Ok(())
+        }
     }
 }
 
-impl SerialBlock<BLOCK_SIZE> for MyBlock {
-    fn deserialize(&self, buf: &mut [u8; BLOCK_SIZE]) -> Result<()> {
-        buf[TIMESTAMP.0..TIMESTAMP.1].clone_from_slice(&self.timestamp.to_le_bytes()[..]);
-        buf[USER_ID.0..USER_ID.1].clone_from_slice(&self.user_id.to_le_bytes()[..]);
-        buf[VERSION.0..VERSION.1].clone_from_slice(&self.version.to_le_bytes()[..]);
-        buf[DATA_SIZE.0..DATA_SIZE.1].clone_from_slice(&self.data_size.to_le_bytes()[..]);
-        buf[MERKLE_ROOT.0..MERKLE_ROOT.1].clone_from_slice(self.merkle_root.as_bytes().unwrap());
-        buf[PREV_HASH.0..PREV_HASH.1].clone_from_slice(self.prev_hash.as_bytes().unwrap());
-        Ok(())
-    }
-
-    fn serialize(buf: &[u8; BLOCK_SIZE]) -> Result<Self>
+impl Deserialize for Block {
+    fn deserialize(buf: &[u8]) -> BcResult<Self>
     where
         Self: Sized,
     {
-        Ok(Self {
-            timestamp: i64::from_le_bytes(buf[TIMESTAMP.0..TIMESTAMP.1].try_into().unwrap()),
-            user_id: u64::from_le_bytes(buf[USER_ID.0..USER_ID.1].try_into().unwrap()),
-            version: u64::from_le_bytes(buf[VERSION.0..VERSION.1].try_into().unwrap()),
-            data_size: u64::from_le_bytes(buf[DATA_SIZE.0..DATA_SIZE.1].try_into().unwrap()),
-            merkle_root: Digest::from_bytes(&buf[MERKLE_ROOT.0..MERKLE_ROOT.1]).unwrap(),
-            prev_hash: Digest::from_bytes(&buf[PREV_HASH.0..PREV_HASH.1]).unwrap(),
-        })
+        if buf.len() != BLOCK_SIZE {
+            Err(BcError::InvalidSliceLength)
+        } else {
+            Ok(Self {
+                timestamp: i64::from_le_bytes(buf[TIMESTAMP.0..TIMESTAMP.1].try_into().unwrap()),
+                user_id: u64::from_le_bytes(buf[USER_ID.0..USER_ID.1].try_into().unwrap()),
+                version: u64::from_le_bytes(buf[VERSION.0..VERSION.1].try_into().unwrap()),
+                data_size: u64::from_le_bytes(buf[DATA_SIZE.0..DATA_SIZE.1].try_into().unwrap()),
+                merkle_root: Digest::deserialize(&buf[MERKLE_ROOT.0..MERKLE_ROOT.1])?,
+            })
+        }
     }
 }
 
-impl MyBlock {
+impl Block {
     pub fn new(user_id: u64, version: u64, data: &[u8]) -> Self {
         Self {
             timestamp: Utc::now().timestamp(),
@@ -90,83 +65,62 @@ impl MyBlock {
             version,
             data_size: data.len() as u64,
             merkle_root: Digest::from(data),
-            prev_hash: Digest::default(),
         }
     }
 }
 
-pub struct MyBlockChain {
-    file: File<BLOCK_SIZE>,
-}
-
-impl MyBlockChain {
-    pub fn new(file: File<BLOCK_SIZE>) -> Self {
-        Self { file }
-    }
-}
-
-impl BlockChain<MyBlock> for MyBlockChain {
-    fn append(&mut self, block: &mut MyBlock) -> Result<()> {
-        Writer::new(&mut self.file)?.write(block)
-    }
-
-    #[allow(unused_variables)]
-    fn contains(&self, block_num: usize, position: usize, data: &[u8]) -> Result<bool> {
-        // need to implement
-        Ok(false)
-    }
-
-    fn count(&self) -> Result<u64> {
-        self.file.count()
-    }
-
-    fn extend(&mut self, blocks: &mut Vec<MyBlock>) -> Result<()> {
-        Writer::new(&mut self.file)?.write_all(blocks)
-    }
-
-    fn get(&self, block_num: u64) -> Result<MyBlock> {
-        Reader::new(&self.file).read(block_num)
-    }
-
-    fn state(&self) -> Result<Digest> {
-        let last_block = self.file.count()?;
-        let block: MyBlock = Reader::new(&self.file).read(last_block - 1)?;
-        let mut buf: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
-        block.deserialize(&mut buf)?;
-        Ok(Digest::from(&buf[..]))
-    }
-
-    fn validate(&self) -> Result<()> {
-        // need to implement
-        Ok(())
-    }
-}
-
-fn main() -> Result<()> {
+fn main() -> BcResult<()> {
+    // some data to put in our blockchain
     let data: Vec<&str> = vec!["hello world", "this", "is", "my", "test", "data"];
 
+    // establish the file path and delete it if it already exists
     let path: &Path = Path::new("./test.bc");
-    let mut genisis_block: MyBlock = MyBlock::new(123, 1, "hello world".as_bytes());
-    let file: File<BLOCK_SIZE> = File::create_new(path, &mut genisis_block)?;
-    let mut block_chain: MyBlockChain = MyBlockChain::new(file);
-
-    for b in data.iter().skip(1) {
-        let mut new_block: MyBlock = MyBlock::new(123, 1, b.as_bytes());
-        block_chain.append(&mut new_block)?;
+    if path.exists() {
+        std::fs::remove_file(path)?;
     }
 
-    for block_num in 0..block_chain.count()? {
-        let block: MyBlock = block_chain.get(block_num)?;
-        let bytes: &[u8] = data[block_num as usize].as_bytes();
-        let digest: Digest = Digest::from(bytes);
-        if digest == block.merkle_root {
-            println!("{:?}", &block);
-        } else {
-            println!("data is not included in the block");
-        }
+    // create a new file
+    let mut genisis_block: Block = Block::new(123, 1, data[0].as_bytes());
+    let mut file: File = File::create_new(path, &mut genisis_block, BLOCK_SIZE)?;
+
+    // test the new file functions
+    assert!(file.block_count()? == 1, "file.block_count() != 1");
+    assert!(
+        file.block_size() == BLOCK_SIZE + 32,
+        "file.block_size() != 96"
+    );
+    assert!(file.size()? == BLOCK_SIZE as u64 + 32, "file.size() != 96");
+    assert!(file.is_valid_size().is_ok(), "file.is_valid_size() failed");
+    file.validate_all_blocks()?;
+
+    // open an existing blockchain file
+    let mut file: File = File::open_existing(path)?;
+
+    {
+        let mut writer: Writer = Writer::new(&mut file)?;
+        let mut chain: Vec<Block> = data
+            .iter()
+            .skip(1)
+            .map(|x| Block::new(123, 1, (*x).as_bytes()))
+            .collect();
+        writer.write_all(&mut chain)?;
     }
 
-    block_chain.validate()?;
+    // test the new file functions
+    assert!(
+        file.block_count()? == data.len() as u64,
+        "file.block_count() != 1"
+    );
+    assert!(
+        file.block_size() == BLOCK_SIZE + 32,
+        "file.block_size() != 96"
+    );
+    assert!(
+        file.size()? == (BLOCK_SIZE as u64 + 32) * (data.len() as u64),
+        "file.size() != 96"
+    );
+    assert!(file.is_valid_size().is_ok(), "file.is_valid_size() failed");
+    file.validate_all_blocks()?;
 
     Ok(())
 }
