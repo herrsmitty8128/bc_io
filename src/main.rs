@@ -1,10 +1,10 @@
+use bc_hash::sha256::Digest;
 use block_boss::blockchain::file::{File, Writer};
 use block_boss::blockchain::{Deserialize, Error as BcError, Result as BcResult, Serialize};
 use chrono::Utc;
-use sha2::sha256::Digest;
-use std::path::Path;
 #[allow(unused_imports)]
 use std::ops::Range;
+use std::path::Path;
 
 pub const TIMESTAMP: (usize, usize) = (0, 8);
 pub const USER_ID: (usize, usize) = (8, 16);

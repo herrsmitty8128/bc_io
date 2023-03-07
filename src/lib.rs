@@ -1,6 +1,6 @@
 pub mod blockchain {
 
-    use sha2::sha256::Error as Sha256Error;
+    use bc_hash::sha256::Error as Sha256Error;
     use std::fmt::{Display, Formatter, Result as FmtResult};
 
     #[derive(Debug, Clone)]
@@ -70,7 +70,7 @@ pub mod blockchain {
     pub mod file {
 
         use crate::blockchain::{Deserialize, Error, Result, Serialize};
-        use sha2::sha256::Digest;
+        use bc_hash::sha256::Digest;
         use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
         use std::ops::Range;
         use std::path::Path;
@@ -99,12 +99,10 @@ pub mod blockchain {
                         .create_new(true)
                         .open(path)?;
                     let block_size: usize = size + 32;
-                    let mut digest: [u8; 32] = [0; 32];
-                    digest[0..4].copy_from_slice(&(block_size as u32).to_le_bytes());
-                    file.write_all(&digest)?;
-                    let mut buffer: Vec<u8> = vec![0; size];
-                    data.serialize(&mut buffer[0..size])?;
-                    file.write_all(&buffer[0..size])?;
+                    let mut buf: Vec<u8> = vec![0; block_size];
+                    buf[0..4].copy_from_slice(&(block_size as u32).to_le_bytes());
+                    data.serialize(&mut buf[32..block_size])?;
+                    file.write_all(&buf)?;
                     file.flush()?;
                     Ok(Self {
                         inner: file,
@@ -126,7 +124,7 @@ pub mod blockchain {
                     let mut buffer: [u8; 4] = [0; 4];
                     file.read_exact(&mut buffer)?;
                     let block_size: usize = u32::from_le_bytes(buffer) as usize;
-                    Self::validate_size(&file, block_size as u64)?;
+                    Self::validate_size(&file, block_size)?;
                     file.rewind()?;
                     Ok(Self {
                         inner: file,
@@ -139,11 +137,11 @@ pub mod blockchain {
                 self.block_size
             }
 
-            fn validate_size(file: &fs::File, block_size: u64) -> Result<()> {
+            fn validate_size(file: &fs::File, block_size: usize) -> Result<()> {
                 let size: u64 = file.metadata()?.len();
                 if size == 0 {
                     Err(Error::FileIsEmpty)
-                } else if size % block_size != 0 {
+                } else if size % block_size as u64 != 0 {
                     Err(Error::InvalidFileSize)
                 } else {
                     Ok(())
@@ -151,7 +149,7 @@ pub mod blockchain {
             }
 
             pub fn is_valid_size(&self) -> Result<()> {
-                Self::validate_size(&self.inner, self.block_size as u64)
+                Self::validate_size(&self.inner, self.block_size)
             }
 
             pub fn size(&self) -> Result<u64> {
@@ -173,7 +171,7 @@ pub mod blockchain {
                 let block_count: u64 = self.block_count()?;
                 let block_size: usize = self.block_size();
                 let mut buffer: Vec<u8> = vec![0; block_size];
-                let mut reader: BufReader<&std::fs::File> = BufReader::new(&self.inner);
+                let mut reader: BufReader<&fs::File> = BufReader::new(&self.inner);
                 reader.seek(SeekFrom::Start(0))?;
                 reader.read_exact(&mut buffer[0..block_size])?;
                 for b in (0..block_count).skip(1) {
@@ -198,7 +196,7 @@ pub mod blockchain {
         #[allow(dead_code)]
         impl<'a> Reader<'a> {
             pub fn new(file: &'a File) -> Reader<'a> {
-                let capacity: usize = file.block_size();
+                let capacity: usize = file.block_size() as usize;
                 Self {
                     inner: BufReader::new(&file.inner),
                     block_size: capacity,
@@ -213,7 +211,7 @@ pub mod blockchain {
                     .ok_or(Error::IntegerOverflow)?;
                 self.inner.seek(SeekFrom::Start(pos))?;
                 self.inner.read_exact(&mut self.buffer[0..32])?;
-                digest.clone_from_le_bytes(&self.buffer[0..32])?;
+                digest.deserialize_in_place(&self.buffer[0..32])?;
                 Ok(())
             }
 
@@ -270,7 +268,7 @@ pub mod blockchain {
         #[allow(dead_code)]
         impl<'a> Writer<'a> {
             pub fn new(file: &'a mut File) -> Result<Self> {
-                let block_size: usize = file.block_size();
+                let block_size: usize = file.block_size() as usize;
                 let mut buf: Vec<u8> = vec![0; block_size];
                 file.inner.seek(SeekFrom::End(-(block_size as i64)))?;
                 file.inner.read_exact(&mut buf[0..block_size])?;

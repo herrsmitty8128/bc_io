@@ -6,5 +6,5 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sha2 = { path = "../sha2/" }
+bc_hash = { path = "../bc_hash/" }
 chrono = "0.4.23"
