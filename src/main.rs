@@ -1,6 +1,5 @@
-use bc_hash::sha256::Digest;
-use block_boss::blockchain::file::{File, Writer};
-use block_boss::blockchain::{Deserialize, Error as BcError, Result as BcResult, Serialize};
+use bc_hash::sha256::{Digest, DIGEST_SIZE};
+use block_boss::io::{File, Reader, Writer, Deserialize, Error as BcError, Result as BcResult, Serialize};
 use chrono::Utc;
 #[allow(unused_imports)]
 use std::ops::Range;
@@ -71,39 +70,46 @@ impl Block {
 
 fn main() -> BcResult<()> {
     // some data to put in our blockchain
-    let data: Vec<&str> = vec!["hello world", "this", "is", "my", "test", "data"];
+    let data: Vec<&str> = vec!["hello world", "this", "is", "the", "test", "data"];
 
     // establish the file path and delete it if it already exists
-    let path: &Path = Path::new("./test.bc");
+    let path: &Path = Path::new("./test.blk");
     if path.exists() {
         std::fs::remove_file(path)?;
     }
 
     // create a new file
     let mut genisis_block: Block = Block::new(123, 1, data[0].as_bytes());
-    let mut file: File = File::create_new(path, &mut genisis_block, BLOCK_SIZE)?;
+    let file: File = File::create_new(path, &mut genisis_block, BLOCK_SIZE)?;
 
-    // test the new file functions
+    // test the some functions
     assert!(file.block_count()? == 1, "file.block_count() != 1");
     assert!(
-        file.block_size() == BLOCK_SIZE + 32,
+        file.block_size() == BLOCK_SIZE + DIGEST_SIZE,
         "file.block_size() != 96"
     );
-    assert!(file.size()? == BLOCK_SIZE as u64 + 32, "file.size() != 96");
+    assert!(
+        file.size()? == (BLOCK_SIZE + DIGEST_SIZE) as u64,
+        "file.size() != 96"
+    );
     assert!(file.is_valid_size().is_ok(), "file.is_valid_size() failed");
-    file.validate_all_blocks()?;
+    //file.validate_all_blocks()?;
 
     // open an existing blockchain file
     let mut file: File = File::open_existing(path)?;
 
     {
         let mut writer: Writer = Writer::new(&mut file)?;
-        let mut chain: Vec<Block> = data
+        let chain: Vec<Block> = data
             .iter()
             .skip(1)
             .map(|x| Block::new(123, 1, (*x).as_bytes()))
             .collect();
-        writer.write_all(&mut chain)?;
+        for data in chain {
+            let mut buf: Vec<u8> = vec![0; BLOCK_SIZE];
+            data.serialize(&mut buf)?;
+            writer.write(&mut buf)?;
+        }
     }
 
     // test the new file functions
@@ -112,15 +118,17 @@ fn main() -> BcResult<()> {
         "file.block_count() != 1"
     );
     assert!(
-        file.block_size() == BLOCK_SIZE + 32,
+        file.block_size() == BLOCK_SIZE + DIGEST_SIZE,
         "file.block_size() != 96"
     );
     assert!(
-        file.size()? == (BLOCK_SIZE as u64 + 32) * (data.len() as u64),
+        file.size()? == (BLOCK_SIZE + DIGEST_SIZE) as u64 * (data.len() as u64),
         "file.size() != 96"
     );
     assert!(file.is_valid_size().is_ok(), "file.is_valid_size() failed");
-    file.validate_all_blocks()?;
+
+    let mut reader: Reader = Reader::new(&mut file);
+    reader.validate_all_blocks()?;
 
     Ok(())
 }

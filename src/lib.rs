@@ -1,10 +1,15 @@
-pub mod blockchain {
+pub mod io {
 
-    use bc_hash::sha256::Error as Sha256Error;
+    use bc_hash::sha256::{DIGEST_SIZE, Digest, Error as Sha256Error};
     use std::fmt::{Display, Formatter, Result as FmtResult};
+    use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+    use std::path::Path;
+    use std::{fs, vec};
 
     #[derive(Debug, Clone)]
     pub enum Error {
+        BadStreamPosition,
+        BlockNumDoesNotExist,
         InvalidSliceLength,
         ZeroBlockSize,
         BlockSizeTooBig,
@@ -22,10 +27,12 @@ pub mod blockchain {
         fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
             use Error::*;
             match self {
+                BadStreamPosition => fmt.write_str("Current stream position is not an even multiple of the block size."),
+                BlockNumDoesNotExist => fmt.write_str("Block number too large (out of bounds) and does not exist."),
                 InvalidBlockHash(n) => fmt.write_fmt(format_args!("The previous block hash saved in block number {} is not the same as the previous block's hash", n)),
                 InvalidSliceLength => fmt.write_str("Invalide slice length"),
                 ZeroBlockSize => fmt.write_str("Block size can not be zero."),
-                BlockSizeTooBig => fmt.write_str("Block size is greater than u32::MAX - 32"),
+                BlockSizeTooBig => fmt.write_str("Block size is greater than u32::MAX - DIGEST_SIZE"),
                 PathAlreadyExists => fmt.write_str("The file path already exists."),
                 PathIsNotAFile => fmt.write_str("The file path is not a file."),
                 FileIsEmpty => fmt.write_str("File is empty."),
@@ -67,238 +74,334 @@ pub mod blockchain {
             Self: Sized;
     }
 
-    pub mod file {
+    #[derive(Debug)]
+    pub struct File {
+        inner: fs::File,
+        block_size: usize,
+    }
 
-        use crate::blockchain::{Deserialize, Error, Result, Serialize};
-        use bc_hash::sha256::Digest;
-        use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-        use std::ops::Range;
-        use std::path::Path;
-        use std::{fs, vec};
-
-        #[derive(Debug)]
-        pub struct File {
-            inner: fs::File,
-            block_size: usize,
+    impl File {
+        pub fn create_new<T: Serialize>(
+            path: &Path,
+            data: &mut T,
+            size: usize,
+        ) -> Result<File> {
+            if size > (u32::MAX as usize - DIGEST_SIZE) {
+                Err(Error::BlockSizeTooBig)
+            } else if size == 0 {
+                Err(Error::ZeroBlockSize)
+            } else {
+                let mut file: fs::File = fs::File::options()
+                    .write(true)
+                    .read(true)
+                    .create_new(true)
+                    .open(path)?;
+                let block_size: usize = size + DIGEST_SIZE;
+                let mut buf: Vec<u8> = vec![0; block_size];
+                buf[0..4].copy_from_slice(&(block_size as u32).to_le_bytes());
+                data.serialize(&mut buf[DIGEST_SIZE..block_size])?;
+                file.write_all(&buf)?;
+                file.flush()?;
+                Ok(Self {
+                    inner: file,
+                    block_size,
+                })
+            }
         }
 
-        impl File {
-            pub fn create_new<T: Serialize>(
-                path: &Path,
-                data: &mut T,
-                size: usize,
-            ) -> Result<File> {
-                if size > (u32::MAX - 32) as usize {
-                    Err(Error::BlockSizeTooBig)
-                } else if size == 0 {
-                    Err(Error::ZeroBlockSize)
-                } else {
-                    let mut file: fs::File = fs::File::options()
-                        .write(true)
-                        .read(true)
-                        .create_new(true)
-                        .open(path)?;
-                    let block_size: usize = size + 32;
-                    let mut buf: Vec<u8> = vec![0; block_size];
-                    buf[0..4].copy_from_slice(&(block_size as u32).to_le_bytes());
-                    data.serialize(&mut buf[32..block_size])?;
-                    file.write_all(&buf)?;
-                    file.flush()?;
-                    Ok(Self {
-                        inner: file,
-                        block_size,
-                    })
-                }
+        /// Creates a new BlockChain object from an existing file in the local file system.
+        pub fn open_existing(path: &Path) -> Result<File> {
+            if !path.exists() {
+                Err(Error::PathAlreadyExists)
+            } else if path.is_dir() {
+                Err(Error::PathIsNotAFile)
+            } else {
+                let mut file: fs::File =
+                    fs::File::options().write(true).read(true).open(path)?;
+                file.seek(SeekFrom::Start(0))?;
+                let mut buffer: [u8; 4] = [0; 4];
+                file.read_exact(&mut buffer)?;
+                let block_size: usize = u32::from_le_bytes(buffer) as usize;
+                Self::validate_size(&file, block_size)?;
+                file.rewind()?;
+                Ok(Self {
+                    inner: file,
+                    block_size,
+                })
             }
+        }
 
-            /// Creates a new BlockChain object from an existing file in the local file system.
-            pub fn open_existing(path: &Path) -> Result<File> {
-                if !path.exists() {
-                    Err(Error::PathAlreadyExists)
-                } else if path.is_dir() {
-                    Err(Error::PathIsNotAFile)
-                } else {
-                    let mut file: fs::File =
-                        fs::File::options().write(true).read(true).open(path)?;
-                    file.seek(SeekFrom::Start(0))?;
-                    let mut buffer: [u8; 4] = [0; 4];
-                    file.read_exact(&mut buffer)?;
-                    let block_size: usize = u32::from_le_bytes(buffer) as usize;
-                    Self::validate_size(&file, block_size)?;
-                    file.rewind()?;
-                    Ok(Self {
-                        inner: file,
-                        block_size,
-                    })
-                }
+        #[inline]
+        pub fn block_size(&self) -> usize {
+            self.block_size
+        }
+
+        fn validate_size(file: &fs::File, block_size: usize) -> Result<()> {
+            let size: u64 = file.metadata()?.len();
+            if size == 0 {
+                Err(Error::FileIsEmpty)
+            } else if size % block_size as u64 != 0 {
+                Err(Error::InvalidFileSize)
+            } else {
+                Ok(())
             }
+        }
 
-            pub fn block_size(&self) -> usize {
-                self.block_size
+        pub fn is_valid_size(&self) -> Result<()> {
+            Self::validate_size(&self.inner, self.block_size)
+        }
+
+        pub fn size(&self) -> Result<u64> {
+            Ok(self.inner.metadata()?.len())
+        }
+
+        pub fn block_count(&self) -> Result<u64> {
+            let file_size: u64 = self.size()?;
+            if file_size == 0 {
+                Err(Error::FileIsEmpty)
+            } else if file_size % self.block_size as u64 != 0 {
+                Err(Error::InvalidFileSize)
+            } else {
+                Ok(file_size / self.block_size as u64)
             }
+        }
+    }
 
-            fn validate_size(file: &fs::File, block_size: usize) -> Result<()> {
-                let size: u64 = file.metadata()?.len();
-                if size == 0 {
-                    Err(Error::FileIsEmpty)
-                } else if size % block_size as u64 != 0 {
-                    Err(Error::InvalidFileSize)
+    impl Read for File {
+        #[inline]
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buf)
+        }
+
+        #[inline]
+        fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+            self.inner.read_exact(buf)
+        }
+    }
+
+    impl Write for File {
+        #[inline]
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.inner.write(buf)
+        }
+
+        #[inline]
+        fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+            self.inner.write_all(buf)
+        }
+
+        #[inline]
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    impl Seek for File {
+        #[inline]
+        fn rewind(&mut self) -> std::io::Result<()> {
+            self.inner.rewind()
+        }
+
+        #[inline]
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+
+        #[inline]
+        fn stream_position(&mut self) -> std::io::Result<u64> {
+            self.inner.stream_position()
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Reader<'a> {
+        inner: BufReader<&'a mut File>,
+    }
+
+    #[allow(dead_code)]
+    impl<'a> Reader<'a> {
+        pub fn new(file: &'a mut File) -> Reader<'a> {
+            Self {
+                inner: BufReader::new(file),
+            }
+        }
+
+        #[inline]
+        pub fn block_size(&self) -> usize {
+            self.inner.get_ref().block_size()
+        }
+
+        #[inline]
+        pub fn block_count(&self) -> Result<u64> {
+            self.inner.get_ref().block_count()
+        }
+
+        #[inline]
+        pub fn size(&self) -> Result<u64> {
+            self.inner.get_ref().size()
+        }
+
+        #[inline]
+        fn stream_position(&mut self) -> Result<u64> {
+            let pos: u64 = self.inner.stream_position()?;
+            let block_size: u64 = self.block_size() as u64;
+            if pos % block_size != 0 {
+                Err(Error::BadStreamPosition)
+            } else {
+                Ok(pos / block_size)
+            }
+        }
+
+        fn rewind(&mut self) -> Result<()> {
+            self.inner.rewind().map_err(Error::from)
+        }
+
+        fn seek(&mut self, block_num: u64) -> Result<u64> {
+            let block_size: usize = self.block_size();
+            let pos: u64 = block_num
+                .checked_mul(block_size as u64)
+                .ok_or(Error::IntegerOverflow)?;
+            self.inner.seek(SeekFrom::Start(pos)).map_err(Error::from)
+        }
+
+        pub fn read(&mut self, buf: &mut [u8]) -> Result<()> {
+            if buf.len() != self.block_size() {
+                Err(Error::InvalidSliceLength)
+            } else {
+                self.inner.read_exact(buf).map_err(Error::from)
+            }
+        }
+
+        pub fn read_block_at(&mut self, index: u64, buf: &mut [u8]) -> Result<()> {
+            let block_size: usize = self.block_size();
+            if buf.len() != block_size {
+                Err(Error::InvalidSliceLength)
+            } else {
+                let pos: u64 = index
+                    .checked_mul(block_size as u64)
+                    .ok_or(Error::IntegerOverflow)?;
+                self.inner.seek(SeekFrom::Start(pos))?;
+                self.inner.read_exact(buf).map_err(Error::from)
+            }
+        }
+
+        pub fn read_data_at(&mut self, index: u64, buf: &mut [u8]) -> Result<()> {
+            let block_size: usize = self.block_size();
+            let data_size: usize = block_size - DIGEST_SIZE;
+            if buf.len() != data_size {
+                Err(Error::InvalidSliceLength)
+            } else {
+                let pos: u64 = index
+                    .checked_mul(block_size as u64)
+                    .ok_or(Error::IntegerOverflow)?
+                    .checked_add(DIGEST_SIZE as u64)
+                    .ok_or(Error::IntegerOverflow)?;
+                self.inner.seek(SeekFrom::Start(pos))?;
+                self.inner.read_exact(buf).map_err(Error::from)
+            }
+        }
+
+        pub fn validate_block_at(&mut self, index: u64) -> Result<()> {
+            let block_size: usize = self.block_size();
+            if index >= self.block_count()? {
+                Err(Error::BlockNumDoesNotExist)
+            } else if index == 0 {
+                Ok(()) // the genisis block is inherently always valid
+            } else {
+                let pos: u64 = index
+                    .checked_mul(block_size as u64)
+                    .ok_or(Error::IntegerOverflow)?;
+                self.inner.seek(SeekFrom::Start(pos))?;
+                let mut buf: Vec<u8> = vec![0; block_size];
+                self.inner.read_exact(&mut buf[0..block_size])?;
+                let d1: Digest = Digest::from(&buf[0..block_size]);
+                self.inner.read_exact(&mut buf[0..block_size])?;
+                let d2: Digest = Digest::deserialize(&buf[0..DIGEST_SIZE])?;
+                if d1 != d2 {
+                    Err(Error::InvalidBlockHash(index))
                 } else {
                     Ok(())
                 }
             }
+        }
 
-            pub fn is_valid_size(&self) -> Result<()> {
-                Self::validate_size(&self.inner, self.block_size)
-            }
-
-            pub fn size(&self) -> Result<u64> {
-                Ok(self.inner.metadata()?.len())
-            }
-
-            pub fn block_count(&self) -> Result<u64> {
-                let file_size: u64 = self.size()?;
-                if file_size == 0 {
-                    Err(Error::FileIsEmpty)
-                } else if file_size % self.block_size as u64 != 0 {
-                    Err(Error::InvalidFileSize)
-                } else {
-                    Ok(file_size / self.block_size as u64)
+        pub fn validate_all_blocks(&mut self) -> Result<()> {
+            let block_size: usize = self.block_size();
+            let block_count: u64 = self.block_count()?;
+            self.inner.seek(SeekFrom::Start(0))?;
+            let mut buf: Vec<u8> = vec![0; block_size];
+            self.inner.read_exact(&mut buf[0..block_size])?; // read the genisis block
+            for b in (0..block_count).skip(1) {
+                let prev_digest: Digest = Digest::from(&buf[0..block_size]);
+                self.inner.read_exact(&mut buf[0..block_size])?;
+                let digest: Digest = Digest::deserialize(&buf[0..DIGEST_SIZE])?;
+                if digest != prev_digest {
+                    return Err(Error::InvalidBlockHash(b));
                 }
             }
+            Ok(())
+        }
+    }
 
-            pub fn validate_all_blocks(&mut self) -> Result<()> {
-                let block_count: u64 = self.block_count()?;
-                let block_size: usize = self.block_size();
-                let mut buffer: Vec<u8> = vec![0; block_size];
-                let mut reader: BufReader<&fs::File> = BufReader::new(&self.inner);
-                reader.seek(SeekFrom::Start(0))?;
-                reader.read_exact(&mut buffer[0..block_size])?;
-                for b in (0..block_count).skip(1) {
-                    let prev_digest: Digest = Digest::from(&buffer[0..block_size]);
-                    reader.read_exact(&mut buffer[0..block_size])?;
-                    let digest: Digest = Digest::deserialize(&buffer[0..32])?;
-                    if digest != prev_digest {
-                        return Err(Error::InvalidBlockHash(b));
-                    }
-                }
-                Ok(())
+    #[derive(Debug)]
+    pub struct Writer<'a> {
+        inner: BufWriter<&'a mut File>,
+        last_hash: Digest,
+        buf: Vec<u8>,
+    }
+
+    #[allow(dead_code)]
+    impl<'a> Writer<'a> {
+        pub fn new(file: &'a mut File) -> Result<Self> {
+            let block_size: usize = file.block_size();
+            let mut buf: Vec<u8> = vec![0; block_size];
+            file.inner.seek(SeekFrom::End(-(block_size as i64)))?;
+            file.inner.read_exact(&mut buf[0..block_size])?;
+            Ok(Self {
+                inner: BufWriter::new(file),
+                last_hash: Digest::from(&buf[0..block_size]),
+                buf,
+            })
+        }
+
+        #[inline]
+        pub fn block_size(&self) -> usize {
+            self.inner.get_ref().block_size()
+        }
+
+        #[inline]
+        pub fn block_count(&self) -> Result<u64> {
+            self.inner.get_ref().block_count()
+        }
+
+        #[inline]
+        pub fn size(&self) -> Result<u64> {
+            self.inner.get_ref().size()
+        }
+
+        #[inline]
+        fn stream_position(&mut self) -> Result<u64> {
+            let pos: u64 = self.inner.stream_position()?;
+            let block_size: u64 = self.block_size() as u64;
+            if pos % block_size != 0 {
+                Err(Error::BadStreamPosition)
+            } else {
+                Ok(pos / block_size)
             }
         }
 
-        #[derive(Debug)]
-        pub struct Reader<'a> {
-            inner: BufReader<&'a fs::File>,
-            block_size: usize,
-            buffer: Vec<u8>,
-        }
-
-        #[allow(dead_code)]
-        impl<'a> Reader<'a> {
-            pub fn new(file: &'a File) -> Reader<'a> {
-                let capacity: usize = file.block_size() as usize;
-                Self {
-                    inner: BufReader::new(&file.inner),
-                    block_size: capacity,
-                    buffer: vec![0; capacity],
-                }
-            }
-
-            /// Reads the digest of the previous block saved in *block_num*, serializes it, and clones it to *digest*.
-            pub fn read_prev_digest(&mut self, block_num: u64, digest: &mut Digest) -> Result<()> {
-                let pos: u64 = block_num
-                    .checked_mul(self.block_size as u64)
-                    .ok_or(Error::IntegerOverflow)?;
-                self.inner.seek(SeekFrom::Start(pos))?;
-                self.inner.read_exact(&mut self.buffer[0..32])?;
-                digest.deserialize_in_place(&self.buffer[0..32])?;
-                Ok(())
-            }
-
-            pub fn calc_block_digest(&mut self, block_num: u64, digest: &mut Digest) -> Result<()> {
-                let pos: u64 = block_num
-                    .checked_mul(self.block_size as u64)
-                    .ok_or(Error::IntegerOverflow)?;
-                self.inner.seek(SeekFrom::Start(pos))?;
-                self.inner
-                    .read_exact(&mut self.buffer[0..self.block_size])?;
-                Digest::calculate(digest, &mut self.buffer);
-                Ok(())
-            }
-
-            pub fn read_data<T: Deserialize>(&mut self, block_num: u64) -> Result<T> {
-                let pos: u64 = block_num
-                    .checked_mul(self.block_size as u64)
-                    .ok_or(Error::IntegerOverflow)?
-                    .checked_add(32)
-                    .ok_or(Error::IntegerOverflow)?;
-                self.inner.seek(SeekFrom::Start(pos))?;
-                self.inner
-                    .read_exact(&mut self.buffer[32..self.block_size])?;
-                T::deserialize(&self.buffer[32..self.block_size])
-            }
-
-            pub fn read_all<T: Deserialize>(&mut self, range: Range<u64>) -> Result<Vec<T>> {
-                let mut chain: Vec<T> = Vec::new();
-                let pos: u64 = range
-                    .start
-                    .checked_mul(self.block_size as u64)
-                    .ok_or(Error::IntegerOverflow)?
-                    .checked_add(32)
-                    .ok_or(Error::IntegerOverflow)?;
-                self.inner.seek(SeekFrom::Start(pos))?;
-                for _ in range {
-                    self.inner
-                        .read_exact(&mut self.buffer[32..self.block_size])?;
-                    chain.push(T::deserialize(&self.buffer[32..self.block_size])?);
-                    self.inner.seek_relative(self.block_size as i64)?;
-                }
-                Ok(chain)
-            }
-        }
-
-        #[derive(Debug)]
-        pub struct Writer<'a> {
-            inner: BufWriter<&'a fs::File>,
-            last_hash: Digest,
-            block_size: usize,
-            buffer: Vec<u8>,
-        }
-
-        #[allow(dead_code)]
-        impl<'a> Writer<'a> {
-            pub fn new(file: &'a mut File) -> Result<Self> {
-                let block_size: usize = file.block_size() as usize;
-                let mut buf: Vec<u8> = vec![0; block_size];
-                file.inner.seek(SeekFrom::End(-(block_size as i64)))?;
-                file.inner.read_exact(&mut buf[0..block_size])?;
-                Ok(Self {
-                    inner: BufWriter::new(&file.inner),
-                    last_hash: Digest::from(&buf[0..block_size]),
-                    block_size,
-                    buffer: vec![0; block_size],
-                })
-            }
-
-            pub fn write<T: Serialize>(&mut self, block: &mut T) -> Result<()> {
-                self.last_hash.serialize(&mut self.buffer[0..32])?;
-                block.serialize(&mut self.buffer[32..self.block_size])?;
+        pub fn write(&mut self, data: &mut [u8]) -> Result<()> {
+            let block_size: usize = self.block_size();
+            if data.len() + DIGEST_SIZE != block_size {
+                Err(Error::InvalidSliceLength)
+            } else {
+                self.last_hash.serialize(&mut self.buf[0..DIGEST_SIZE])?;
+                self.buf[DIGEST_SIZE..block_size].clone_from_slice(data);
                 self.inner.seek(SeekFrom::End(0))?;
-                self.inner.write_all(&self.buffer[0..self.block_size])?;
+                self.inner.write_all(&self.buf[0..block_size])?;
                 self.inner.flush()?;
-                self.last_hash = Digest::from(&self.buffer[0..self.block_size]);
+                self.last_hash = Digest::from(&self.buf[0..block_size]);
                 Ok(())
-            }
-
-            pub fn write_all<T: Serialize>(&mut self, blocks: &mut Vec<T>) -> Result<()> {
-                self.inner.seek(SeekFrom::End(0))?;
-                for block in blocks {
-                    self.last_hash.serialize(&mut self.buffer[0..32])?;
-                    block.serialize(&mut self.buffer[32..self.block_size])?;
-                    self.inner.write_all(&self.buffer[0..self.block_size])?;
-                    self.last_hash = Digest::from(&self.buffer[0..self.block_size]);
-                }
-                self.inner.flush().map_err(Error::from)
             }
         }
     }
