@@ -256,15 +256,14 @@ pub mod io {
             self.inner.rewind().map_err(Error::from)
         }
 
-        fn seek(&mut self, block_num: u64) -> Result<u64> {
-            let block_size: usize = self.block_size();
-            let pos: u64 = block_num
-                .checked_mul(block_size as u64)
+        fn seek(&mut self, index: u64) -> Result<u64> {
+            let pos: u64 = index
+                .checked_mul(self.block_size() as u64)
                 .ok_or(Error::IntegerOverflow)?;
             self.inner.seek(SeekFrom::Start(pos)).map_err(Error::from)
         }
 
-        pub fn read(&mut self, buf: &mut [u8]) -> Result<()> {
+        pub fn read_block(&mut self, buf: &mut [u8]) -> Result<()> {
             if buf.len() != self.block_size() {
                 Err(Error::InvalidSliceLength)
             } else {
@@ -273,32 +272,22 @@ pub mod io {
         }
 
         pub fn read_block_at(&mut self, index: u64, buf: &mut [u8]) -> Result<()> {
-            let block_size: usize = self.block_size();
-            if buf.len() != block_size {
+            self.seek(index)?;
+            self.read_block(buf)
+        }
+
+        pub fn read_data(&mut self, buf: &mut [u8]) -> Result<()> {
+            if buf.len() != self.block_size() {
                 Err(Error::InvalidSliceLength)
             } else {
-                let pos: u64 = index
-                    .checked_mul(block_size as u64)
-                    .ok_or(Error::IntegerOverflow)?;
-                self.inner.seek(SeekFrom::Start(pos))?;
+                self.inner.seek(SeekFrom::Current(DIGEST_SIZE as i64))?;
                 self.inner.read_exact(buf).map_err(Error::from)
             }
         }
 
         pub fn read_data_at(&mut self, index: u64, buf: &mut [u8]) -> Result<()> {
-            let block_size: usize = self.block_size();
-            let data_size: usize = block_size - DIGEST_SIZE;
-            if buf.len() != data_size {
-                Err(Error::InvalidSliceLength)
-            } else {
-                let pos: u64 = index
-                    .checked_mul(block_size as u64)
-                    .ok_or(Error::IntegerOverflow)?
-                    .checked_add(DIGEST_SIZE as u64)
-                    .ok_or(Error::IntegerOverflow)?;
-                self.inner.seek(SeekFrom::Start(pos))?;
-                self.inner.read_exact(buf).map_err(Error::from)
-            }
+            self.seek(index)?;
+            self.read_data(buf)
         }
 
         pub fn validate_block_at(&mut self, index: u64) -> Result<()> {
