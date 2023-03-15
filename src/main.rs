@@ -100,15 +100,15 @@ fn main() -> BcResult<()> {
 
     {
         let mut writer: Writer = Writer::new(&mut file)?;
+        let mut buf: Vec<u8> = vec![0; BLOCK_SIZE];
         let chain: Vec<Block> = data
             .iter()
             .skip(1)
             .map(|x| Block::new(123, 1, (*x).as_bytes()))
             .collect();
         for data in chain {
-            let mut buf: Vec<u8> = vec![0; BLOCK_SIZE];
             data.serialize(&mut buf)?;
-            writer.write(&mut buf)?;
+            writer.append(&mut buf)?;
         }
     }
 
@@ -127,8 +127,30 @@ fn main() -> BcResult<()> {
     );
     assert!(file.is_valid_size().is_ok(), "file.is_valid_size() failed");
 
+    let index = file.block_count()? - 1;
     let mut reader: Reader = Reader::new(&mut file);
+    reader.validate_block_at(index)?;
     reader.validate_all_blocks()?;
+
+    let mut data_buf: Vec<u8> = vec![0; BLOCK_SIZE];
+    let mut block_buf: Vec<u8> = vec![0; reader.block_size()];
+    reader.rewind()?;
+    reader.read_block(&mut block_buf)?;
+    let obj = Block::deserialize(&block_buf[DIGEST_SIZE..])?;
+    println!("Read block {:?}", &obj);
+
+    reader.read_block_at(3, &mut block_buf)?;
+    let obj = Block::deserialize(&block_buf[DIGEST_SIZE..])?;
+    println!("Block at index 3 {:?}", &obj);
+
+    //reader.rewind()?;
+    reader.read_data(&mut data_buf)?;
+    let obj = Block::deserialize(&data_buf)?;
+    println!("Read data {:?}", &obj);
+
+    reader.read_data_at(3, &mut data_buf)?;
+    let obj = Block::deserialize(&data_buf)?;
+    println!("Read data {:?}", &obj);
 
     Ok(())
 }

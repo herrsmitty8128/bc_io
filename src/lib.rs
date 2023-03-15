@@ -8,7 +8,7 @@ pub mod io {
 
     #[derive(Debug, Clone)]
     pub enum Error {
-        BadStreamPosition,
+        BadStreamPosition(u64),
         BlockNumDoesNotExist,
         InvalidSliceLength,
         ZeroBlockSize,
@@ -27,7 +27,7 @@ pub mod io {
         fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
             use Error::*;
             match self {
-                BadStreamPosition => fmt.write_str("Current stream position is not an even multiple of the block size."),
+                BadStreamPosition(n) => fmt.write_fmt(format_args!("Current stream position {} is not an even multiple of the block size.", n)),
                 BlockNumDoesNotExist => fmt.write_str("Block number too large (out of bounds) and does not exist."),
                 InvalidBlockHash(n) => fmt.write_fmt(format_args!("The previous block hash saved in block number {} is not the same as the previous block's hash", n)),
                 InvalidSliceLength => fmt.write_str("Invalide slice length"),
@@ -118,7 +118,7 @@ pub mod io {
             } else {
                 let mut file: fs::File =
                     fs::File::options().write(true).read(true).open(path)?;
-                file.seek(SeekFrom::Start(0))?;
+                file.rewind()?;
                 let mut buffer: [u8; 4] = [0; 4];
                 file.read_exact(&mut buffer)?;
                 let block_size: usize = u32::from_le_bytes(buffer) as usize;
@@ -237,26 +237,26 @@ pub mod io {
         }
 
         #[inline]
-        pub fn size(&self) -> Result<u64> {
+        pub fn stream_size(&self) -> Result<u64> {
             self.inner.get_ref().size()
         }
 
         #[inline]
-        fn stream_position(&mut self) -> Result<u64> {
+        pub fn stream_position(&mut self) -> Result<u64> {
             let pos: u64 = self.inner.stream_position()?;
             let block_size: u64 = self.block_size() as u64;
             if pos % block_size != 0 {
-                Err(Error::BadStreamPosition)
+                Err(Error::BadStreamPosition(pos))
             } else {
-                Ok(pos / block_size)
+                Ok(pos)
             }
         }
 
-        fn rewind(&mut self) -> Result<()> {
+        pub fn rewind(&mut self) -> Result<()> {
             self.inner.rewind().map_err(Error::from)
         }
 
-        fn seek(&mut self, index: u64) -> Result<u64> {
+        pub fn seek(&mut self, index: u64) -> Result<u64> {
             let pos: u64 = index
                 .checked_mul(self.block_size() as u64)
                 .ok_or(Error::IntegerOverflow)?;
@@ -277,7 +277,7 @@ pub mod io {
         }
 
         pub fn read_data(&mut self, buf: &mut [u8]) -> Result<()> {
-            if buf.len() != self.block_size() {
+            if buf.len() != self.block_size() - DIGEST_SIZE {
                 Err(Error::InvalidSliceLength)
             } else {
                 self.inner.seek(SeekFrom::Current(DIGEST_SIZE as i64))?;
@@ -297,7 +297,7 @@ pub mod io {
             } else if index == 0 {
                 Ok(()) // the genisis block is inherently always valid
             } else {
-                let pos: u64 = index
+                let pos: u64 = (index - 1)
                     .checked_mul(block_size as u64)
                     .ok_or(Error::IntegerOverflow)?;
                 self.inner.seek(SeekFrom::Start(pos))?;
@@ -317,7 +317,7 @@ pub mod io {
         pub fn validate_all_blocks(&mut self) -> Result<()> {
             let block_size: usize = self.block_size();
             let block_count: u64 = self.block_count()?;
-            self.inner.seek(SeekFrom::Start(0))?;
+            self.inner.rewind()?;
             let mut buf: Vec<u8> = vec![0; block_size];
             self.inner.read_exact(&mut buf[0..block_size])?; // read the genisis block
             for b in (0..block_count).skip(1) {
@@ -364,22 +364,22 @@ pub mod io {
         }
 
         #[inline]
-        pub fn size(&self) -> Result<u64> {
+        pub fn stream_size(&self) -> Result<u64> {
             self.inner.get_ref().size()
         }
 
         #[inline]
-        fn stream_position(&mut self) -> Result<u64> {
+        pub fn stream_position(&mut self) -> Result<u64> {
             let pos: u64 = self.inner.stream_position()?;
             let block_size: u64 = self.block_size() as u64;
             if pos % block_size != 0 {
-                Err(Error::BadStreamPosition)
+                Err(Error::BadStreamPosition(pos))
             } else {
-                Ok(pos / block_size)
+                Ok(pos)
             }
         }
 
-        pub fn write(&mut self, data: &mut [u8]) -> Result<()> {
+        pub fn append(&mut self, data: &mut [u8]) -> Result<()> {
             let block_size: usize = self.block_size();
             if data.len() + DIGEST_SIZE != block_size {
                 Err(Error::InvalidSliceLength)
