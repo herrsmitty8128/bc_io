@@ -22,7 +22,7 @@ name = "bc_hash"
 version = "0.1.0"
 
 [[package]]
-name = "block_boss"
+name = "bc_io"
 version = "0.1.0"
 dependencies = [
  "bc_hash",

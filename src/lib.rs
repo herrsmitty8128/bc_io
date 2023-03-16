@@ -1,6 +1,6 @@
 pub mod io {
 
-    use bc_hash::sha256::{DIGEST_SIZE, Digest, Error as Sha256Error};
+    use bc_hash::sha256::{Digest, Error as Sha256Error, DIGEST_SIZE};
     use std::fmt::{Display, Formatter, Result as FmtResult};
     use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
     use std::path::Path;
@@ -81,11 +81,8 @@ pub mod io {
     }
 
     impl File {
-        pub fn create_new<T: Serialize>(
-            path: &Path,
-            data: &mut T,
-            size: usize,
-        ) -> Result<File> {
+        /// Creates a new blockchain file in the local file system. 
+        pub fn create_new<T: Serialize>(path: &Path, data: &mut T, size: usize) -> Result<File> {
             if size > (u32::MAX as usize - DIGEST_SIZE) {
                 Err(Error::BlockSizeTooBig)
             } else if size == 0 {
@@ -116,8 +113,7 @@ pub mod io {
             } else if path.is_dir() {
                 Err(Error::PathIsNotAFile)
             } else {
-                let mut file: fs::File =
-                    fs::File::options().write(true).read(true).open(path)?;
+                let mut file: fs::File = fs::File::options().write(true).read(true).open(path)?;
                 file.rewind()?;
                 let mut buffer: [u8; 4] = [0; 4];
                 file.read_exact(&mut buffer)?;
@@ -131,11 +127,13 @@ pub mod io {
             }
         }
 
+        /// Returns the block size of the underlying blockchain file.
         #[inline]
         pub fn block_size(&self) -> usize {
             self.block_size
         }
 
+        /// Returns Ok(()) if the file is not empty and the total files size is an even multiple of the block size.
         fn validate_size(file: &fs::File, block_size: usize) -> Result<()> {
             let size: u64 = file.metadata()?.len();
             if size == 0 {
@@ -147,14 +145,17 @@ pub mod io {
             }
         }
 
+        /// Returns Ok(()) if the file is not empty and the total files size is an even multiple of the block size.
         pub fn is_valid_size(&self) -> Result<()> {
             Self::validate_size(&self.inner, self.block_size)
         }
 
+        /// Returns the size of the underlying blockchain file in bytes.
         pub fn size(&self) -> Result<u64> {
             Ok(self.inner.metadata()?.len())
         }
 
+        /// Returns the total number of blocks in the underlying blockchain file.
         pub fn block_count(&self) -> Result<u64> {
             let file_size: u64 = self.size()?;
             if file_size == 0 {
@@ -213,6 +214,7 @@ pub mod io {
         }
     }
 
+    /// A struct that wraps a ```io::Bufreader```
     #[derive(Debug)]
     pub struct Reader<'a> {
         inner: BufReader<&'a mut File>,
@@ -220,27 +222,33 @@ pub mod io {
 
     #[allow(dead_code)]
     impl<'a> Reader<'a> {
+        /// Creates and returns a new reader object from a ```bc_io::io::File``` object.
         pub fn new(file: &'a mut File) -> Reader<'a> {
             Self {
                 inner: BufReader::new(file),
             }
         }
 
+        /// Returns the block size for the underlying blockchain in bytes.
         #[inline]
         pub fn block_size(&self) -> usize {
             self.inner.get_ref().block_size()
         }
 
+        /// Returns the total number of blocks in the stream.
         #[inline]
         pub fn block_count(&self) -> Result<u64> {
             self.inner.get_ref().block_count()
         }
 
+        /// Returns the total size of the stream in bytes.
         #[inline]
         pub fn stream_size(&self) -> Result<u64> {
             self.inner.get_ref().size()
         }
 
+        /// Returns the current position in the byte stream. If the position is not an even
+        /// multiple of the block size, then Err(Error::BadStreamPosition(pos)) is returned.
         #[inline]
         pub fn stream_position(&mut self) -> Result<u64> {
             let pos: u64 = self.inner.stream_position()?;
@@ -252,10 +260,12 @@ pub mod io {
             }
         }
 
+        /// Calls ```rewind()``` on the underlying blockchain file.
         pub fn rewind(&mut self) -> Result<()> {
             self.inner.rewind().map_err(Error::from)
         }
 
+        /// Calls ```seek()``` on the underlying blockchain file.
         pub fn seek(&mut self, index: u64) -> Result<u64> {
             let pos: u64 = index
                 .checked_mul(self.block_size() as u64)
@@ -263,6 +273,9 @@ pub mod io {
             self.inner.seek(SeekFrom::Start(pos)).map_err(Error::from)
         }
 
+        /// Reads the entire block located at the current stream position and copies it into ```buf```.
+        /// Returns Ok(()) on success, or Err(Error) on failure. The length of ```buf```
+        /// must be exactly equal to the total block size.
         pub fn read_block(&mut self, buf: &mut [u8]) -> Result<()> {
             if buf.len() != self.block_size() {
                 Err(Error::InvalidSliceLength)
@@ -271,11 +284,18 @@ pub mod io {
             }
         }
 
+        /// Reads the entire block located at ```index``` and copies it into ```buf```.
+        /// Returns Ok(()) on success, or Err(Error) on failure. The length of ```buf```
+        /// must be exactly equal to the total block size.
         pub fn read_block_at(&mut self, index: u64, buf: &mut [u8]) -> Result<()> {
             self.seek(index)?;
             self.read_block(buf)
         }
 
+        /// Reads the data section of the block located at the current stream position and
+        /// copies it into ```buf```. Returns Ok(()) on success, or Err(Error) on failure.
+        /// The length of ```buf``` must be exactly equal to the total block size minus the
+        /// size of a SHA-256 digest (32 bytes).
         pub fn read_data(&mut self, buf: &mut [u8]) -> Result<()> {
             if buf.len() != self.block_size() - DIGEST_SIZE {
                 Err(Error::InvalidSliceLength)
@@ -285,11 +305,17 @@ pub mod io {
             }
         }
 
+        /// Reads the data section of of the block located at ```index``` and copies it into ```buf```.
+        /// Returns Ok(()) on success, or Err(Error) on failure. The length of ```buf``` must be
+        /// exactly equal to the total block size minus the size of a SHA-256 digest (32 bytes).
         pub fn read_data_at(&mut self, index: u64, buf: &mut [u8]) -> Result<()> {
             self.seek(index)?;
             self.read_data(buf)
         }
 
+        /// Calculates the hash of the block located at ```index - 1``` and compares
+        /// it to the previous block's hash stored in the block located at ```index```.
+        /// Returns Ok(()) if the hashs are identical, or Err(Error::InvalidBlockHash(index)) if not.
         pub fn validate_block_at(&mut self, index: u64) -> Result<()> {
             let block_size: usize = self.block_size();
             if index >= self.block_count()? {
@@ -314,6 +340,10 @@ pub mod io {
             }
         }
 
+        /// Iterates over each block in the range [1..], calculates the hash of the previous block, and
+        /// compares it to the previous block hash stored in the current block. If it encounters two hashs
+        /// that are not identical, then Err(Error::InvalidBlockHash(b)) is returned. Otherwise Ok(())
+        /// is returned when the iteration is complete.
         pub fn validate_all_blocks(&mut self) -> Result<()> {
             let block_size: usize = self.block_size();
             let block_count: u64 = self.block_count()?;
@@ -341,6 +371,7 @@ pub mod io {
 
     #[allow(dead_code)]
     impl<'a> Writer<'a> {
+        /// Creates and returns an new ```Writer```.
         pub fn new(file: &'a mut File) -> Result<Self> {
             let block_size: usize = file.block_size();
             let mut buf: Vec<u8> = vec![0; block_size];
@@ -353,21 +384,26 @@ pub mod io {
             })
         }
 
+        /// Returns the block size for the underlying blockchain in bytes.
         #[inline]
         pub fn block_size(&self) -> usize {
             self.inner.get_ref().block_size()
         }
 
+        /// Returns the total number of blocks in the stream.
         #[inline]
         pub fn block_count(&self) -> Result<u64> {
             self.inner.get_ref().block_count()
         }
 
+        /// Returns the total size of the stream in bytes.
         #[inline]
         pub fn stream_size(&self) -> Result<u64> {
             self.inner.get_ref().size()
         }
 
+        /// Returns the current position in the byte stream. If the position is not an even
+        /// multiple of the block size, then Err(Error::BadStreamPosition(pos)) is returned.
         #[inline]
         pub fn stream_position(&mut self) -> Result<u64> {
             let pos: u64 = self.inner.stream_position()?;
@@ -379,6 +415,11 @@ pub mod io {
             }
         }
 
+        /// Writes a new block to the end of the stream. You need not concern yourself with the previous
+        /// block hash when calling this method. ```Writer``` takes care of this for you. The ```data`` arg
+        /// should contains the serialized data section of the new block. As suchy, the length of ```data```
+        /// must be exactly equal to the total block size minus the size of a SHA-256 digest (32 bytes).
+        /// If not, then Err(Error::InvalidSliceLength) is returned.
         pub fn append(&mut self, data: &mut [u8]) -> Result<()> {
             let block_size: usize = self.block_size();
             if data.len() + DIGEST_SIZE != block_size {

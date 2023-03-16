@@ -1,8 +1,8 @@
 use bc_hash::sha256::{Digest, DIGEST_SIZE};
-use block_boss::io::{File, Reader, Writer, Deserialize, Error as BcError, Result as BcResult, Serialize};
+use bc_io::io::{
+    Deserialize, Error as BcError, File, Reader, Result as BcResult, Serialize, Writer,
+};
 use chrono::Utc;
-#[allow(unused_imports)]
-use std::ops::Range;
 use std::path::Path;
 
 pub const TIMESTAMP: (usize, usize) = (0, 8);
